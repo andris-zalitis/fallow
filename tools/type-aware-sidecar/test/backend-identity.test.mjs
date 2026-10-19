@@ -12,7 +12,7 @@ test("status, semantic and mutant serializers report their selected native ident
   const status = createStatusResponse(backendIdentity);
   const semantic = createSemanticResponse({
     backendIdentity, selectedTsconfigs: [], referenceScopeCoverage: {}, projectResults: [],
-    results: [], elapsedMs: 0,
+    results: [], phaseTimings: {}, warnings: [], elapsedMs: 0,
   });
   const mutant = createMutantTypecheckResponse({ backendIdentity, results: [], elapsedMs: 0 });
   assert.deepEqual([
