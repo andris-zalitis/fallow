@@ -1205,6 +1205,43 @@ mod tests {
     }
 
     #[test]
+    fn semantic_reference_scope_comes_from_native_root_roles_and_reachability() {
+        use fallow_config::{FallowConfig, OutputFormat};
+        use fallow_types::semantic::{ReferenceRootRole, ReferenceScope, ReferenceScopeMode};
+        let paths = ["app.ts", "helper.ts", "shared.ts", "orphan.ts", "theme.css"];
+        let files: Vec<_> = paths.iter().enumerate().map(|(id, name)| DiscoveredFile {
+            id: FileId(id as u32), path: PathBuf::from("/project").join(name), size_bytes: 1,
+        }).collect();
+        let modules: Vec<_> = files.iter().enumerate().map(|(id, file)| ResolvedModule {
+            file_id: file.id, path: file.path.clone(),
+            resolved_imports: if id == 0 {
+                vec![import(FileId(2), ImportedName::SideEffect), import(FileId(4), ImportedName::SideEffect)]
+            } else if id == 1 { vec![import(FileId(2), ImportedName::SideEffect)] } else { Vec::new() },
+            ..ResolvedModule::default()
+        }).collect();
+        let runtime = vec![EntryPoint { path: files[0].path.clone(), source: EntryPointSource::PackageJsonMain }];
+        let tests = vec![EntryPoint { path: files[1].path.clone(), source: EntryPointSource::TestFile }];
+        let roots = [runtime.clone(), tests.clone()].concat();
+        let graph = RetainedModuleGraph::from(ModuleGraph::build_with_reachability_roots_and_replacements(
+            &modules, &[], &roots, &runtime, &tests, &files,
+        ));
+        let mut config = FallowConfig::default().resolve(PathBuf::from("/project"), OutputFormat::Json, 1, true, true, None);
+        config.production = true;
+        let production = graph.reference_scope(&config).expect("native projection");
+        let ReferenceScope::Graph { mode, sources, roots, fingerprint } = &production else { panic!("graph scope") };
+        assert_eq!(*mode, ReferenceScopeMode::Production);
+        assert_eq!(sources, &["app.ts", "shared.ts"]);
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0].role, ReferenceRootRole::Runtime);
+        assert_eq!(roots[1].role, ReferenceRootRole::Test);
+        assert_eq!(fingerprint.len(), 64);
+        config.production = false;
+        let ReferenceScope::Graph { sources, fingerprint: all_fingerprint, .. } = graph.reference_scope(&config).expect("all projection") else { panic!("graph scope") };
+        assert_eq!(sources, ["app.ts", "helper.ts", "shared.ts"]);
+        assert_ne!(&all_fingerprint, fingerprint);
+    }
+
+    #[test]
     fn export_coverage_requires_one_root_to_reach_consumer_and_target() {
         let graph = mixed_root_graph(false);
 
