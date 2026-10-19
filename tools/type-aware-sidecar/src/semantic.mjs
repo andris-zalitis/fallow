@@ -750,7 +750,7 @@ const scanSymbolUseFile = (root, state, project, sourceFile, includeDefaultImpor
   const nodes = [];
   visit(sourceFile, (node) => {
     recordDynamicImportUncertainty(state, project, node);
-    if (projectEntries.size > 0) {
+    if (projectEntries.size > 0 && !isTypePosition(node)) {
       recordStringDispatchedMemberAccess(state, projectEntries, node);
       recordComputedMemberAccess(state, project, projectEntries, node);
     }
@@ -2152,7 +2152,7 @@ const attestReferenceScope = (root, scope, queries, states, resolvedByQuery) => 
       const absolute = canonicalFileIdentity(path.resolve(root, file));
       const owners = states.filter(({ project }) => project.program.getSourceFile(absolute));
       if (owners.length === 0 || !owners.some(({ status }) => status === "complete")) {
-        throw new Error(`reference scope source ${file} has no complete owning compiler project`);
+        throw new Error(`reference scope source ${file} has no complete owning compiler project: ${owners.map(({ config, reason_code }) => `${config} (${reason_code})`).join(", ") || "no owner"}`);
       }
     }
     for (const query of queries.filter(({ symbol }) => symbol)) {
@@ -2251,7 +2251,10 @@ export const analyzeSemanticQueries = (
   { root, projects, queries, evidenceLimit, referenceScope },
   { createApi = (cwd) => new API({ cwd }) } = {},
 ) => {
-  if (queries.length === 0) return emptyRequestedAnalysis();
+  if (queries.length === 0 && referenceScope.kind === "compiler-program") return {
+    ...emptyRequestedAnalysis(),
+    referenceScopeCoverage: attestReferenceScope(root, referenceScope, queries, [], new Map()),
+  };
   const setupStartedAt = performance.now();
   const api = createApi(root);
   try {
