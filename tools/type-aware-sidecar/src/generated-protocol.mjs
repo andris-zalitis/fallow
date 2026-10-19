@@ -8,10 +8,7 @@ export const TYPE_AWARE_PROTOCOL = Object.freeze({
   mutant_typecheck_operation: "mutant-typecheck",
   query_operations: ["symbol-use", "symbol-trace", "api-surface", "symbol-impact", "type-coupling"],
   session_envelope_types: ["analyze", "shutdown"],
-  backend: {
-    family: "typescript-go",
-    version: "7.0.2",
-  },
+  backend: {"family":"typescript-go","version":"7.0.2-upstroke.1","client_version":"7.0.2","source":{"repository":"https://github.com/microsoft/typescript-go.git","base_revision":"2bd066d87f5bafd315be9f40889d0a60b9e58e0b","delta_path":"scripts/fork/typescript-go.patch","tree":"660dd7df14bb09ed2fb8ad26cdc293f44cee239e"},"build":{"go_version":"go1.26.0","library_mode":"embedded"},"trust_root":"fork-trust-root.pem"},
   sidecar: {
     package: "fallow-type-aware",
     version_source: "workspace-package",
@@ -26,4 +23,5 @@ export const QUERY_OPERATIONS = Object.freeze(TYPE_AWARE_PROTOCOL.query_operatio
 export const SESSION_ENVELOPE_TYPES = Object.freeze(TYPE_AWARE_PROTOCOL.session_envelope_types);
 export const BACKEND_FAMILY = TYPE_AWARE_PROTOCOL.backend.family;
 export const BACKEND_VERSION = TYPE_AWARE_PROTOCOL.backend.version;
+export const CLIENT_VERSION = TYPE_AWARE_PROTOCOL.backend.client_version;
 export const SIDECAR_PACKAGE = TYPE_AWARE_PROTOCOL.sidecar.package;
