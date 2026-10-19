@@ -221,6 +221,8 @@ test("generateTypeAwareProtocol writes a module that holds the manifest values",
     assert.deepEqual([...generated.QUERY_OPERATIONS], manifest.query_operations);
     assert.deepEqual([...generated.SESSION_ENVELOPE_TYPES], manifest.session_envelope_types);
     assert.equal(generated.BACKEND_FAMILY, manifest.backend.family);
+    assert.deepEqual(generated.TYPE_AWARE_PROTOCOL.backend, manifest.backend);
+    assert.equal(generated.CLIENT_VERSION, manifest.backend.client_version);
     assert.equal(generated.SIDECAR_PACKAGE, manifest.sidecar.package);
     assert.ok(Object.isFrozen(generated.TYPE_AWARE_PROTOCOL));
   });

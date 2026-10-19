@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+import { getSelectedBackend } from "./backend-preflight.mjs";
 import { API, SignatureKind, SymbolFlags } from "typescript/unstable/sync";
 import {
   isCallExpression,
@@ -2205,7 +2206,7 @@ const executeDisposableSemanticAnalysis = (input) => {
 
 export const analyzeSemanticQueries = (
   { root, projects, queries, evidenceLimit },
-  { createApi = (cwd) => new API({ cwd }) } = {},
+  { createApi = (cwd) => new API({ cwd, tsserverPath: getSelectedBackend().path }) } = {},
 ) => {
   if (queries.length === 0) return emptyRequestedAnalysis();
   const setupStartedAt = performance.now();
@@ -2224,7 +2225,7 @@ export const analyzeSemanticQueries = (
   }
 };
 
-export const createSemanticSession = (root, { createApi = (cwd) => new API({ cwd }) } = {}) => {
+export const createSemanticSession = (root, { createApi = (cwd) => new API({ cwd, tsserverPath: getSelectedBackend().path }) } = {}) => {
   const api = createApi(root);
   const state = {
     openFiles: new Set(),

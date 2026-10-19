@@ -25,6 +25,14 @@ struct ProtocolManifest {
 struct Backend {
     family: String,
     version: String,
+    #[serde(rename = "client_version")]
+    _client_version: String,
+    #[serde(rename = "source")]
+    _source: serde_json::Value,
+    #[serde(rename = "build")]
+    _build: serde_json::Value,
+    #[serde(rename = "trust_root")]
+    _trust_root: String,
 }
 
 #[derive(Deserialize)]

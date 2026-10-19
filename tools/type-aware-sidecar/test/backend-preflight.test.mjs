@@ -7,7 +7,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { assertTypescriptBackendResolvable } from "../src/backend-preflight.mjs";
-import { BACKEND_VERSION } from "../src/generated-protocol.mjs";
+import { CLIENT_VERSION } from "../src/generated-protocol.mjs";
+
+import { backendFixture } from "../test-support/backend-fixture.mjs";
 
 const sidecarRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -23,8 +25,15 @@ const writeFakeTypescript = (root, version) => {
   return packageDir;
 };
 
-test("preflight accepts the sidecar's own typescript install", () => {
-  assertTypescriptBackendResolvable();
+test("preflight accepts its exact client and selected signed native payload", (t) => {
+  const fixture = backendFixture(t);
+  const selected = assertTypescriptBackendResolvable(undefined, {
+    manifestPath: fixture.manifestPath,
+    publicKey: fixture.publicKey,
+    executeVersion: () => ({ status: 0, stdout: `Version ${fixture.manifest.backend.version}\n` }),
+  });
+  assert.equal(selected.version, fixture.manifest.backend.version);
+  assert.equal(selected.path, path.join(fixture.root, "tsgo"));
 });
 
 test("root npm install stays in typescript lockstep with the sidecar", () => {
@@ -47,7 +56,7 @@ test("preflight names the version conflict when typescript is too old", () => {
       (error) => {
         assert.match(error.message, /resolved typescript 6\.0\.3/);
         assert.ok(error.message.includes(packageDir));
-        assert.ok(error.message.includes(BACKEND_VERSION));
+        assert.ok(error.message.includes(CLIENT_VERSION));
         assert.match(error.message, /npm ci/);
         return true;
       },

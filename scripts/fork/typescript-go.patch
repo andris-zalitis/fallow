@@ -1,0 +1,86 @@
+diff --git a/internal/project/inferredoptions_test.go b/internal/project/inferredoptions_test.go
+new file mode 100644
+index 0000000..923d6d4
+--- /dev/null
++++ b/internal/project/inferredoptions_test.go
+@@ -0,0 +1,74 @@
++package project_test
++
++import (
++	"context"
++	"testing"
++
++	"github.com/microsoft/typescript-go/internal/lsp/lsproto"
++	"github.com/microsoft/typescript-go/internal/testutil/projecttestutil"
++	"github.com/microsoft/typescript-go/internal/tspath"
++)
++
++func TestDefaultInferredProgramsHaveValidAnalysisOptions(t *testing.T) {
++	t.Parallel()
++	for _, test := range []struct {
++		name     string
++		path     string
++		language lsproto.LanguageKind
++	}{
++		{"TypeScript", "/src/index.ts", lsproto.LanguageKindTypeScript},
++		{"JavaScript", "/src/index.js", lsproto.LanguageKindJavaScript},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			t.Parallel()
++			const content = `import { value } from "./lib.ts"; export const result = value;`
++			session, _ := projecttestutil.Setup(map[string]any{
++				test.path:     content,
++				"/src/lib.ts": "export const value = 1;",
++			})
++			uri := lsproto.DocumentUri("file://" + test.path)
++			session.DidOpenFile(context.Background(), uri, 1, content, test.language)
++			if _, err := session.GetLanguageService(context.Background(), uri); err != nil {
++				t.Fatal(err)
++			}
++			inferred := session.Snapshot().ProjectCollection.InferredProject()
++			if inferred == nil {
++				t.Fatal("unconfigured source must belong to an inferred project")
++			}
++			program := inferred.GetProgram()
++			if program.GetSourceFile("/src/lib.ts") == nil {
++				t.Error("inferred analysis must retain TypeScript-extension imports")
++			}
++			for _, diagnostic := range program.GetProgramDiagnostics() {
++				t.Errorf("default inferred analysis options produced diagnostic %d: %s", diagnostic.Code(), diagnostic.MessageKey())
++			}
++		})
++	}
++}
++
++func TestConfiguredProgramsKeepExplicitEmitOptions(t *testing.T) {
++	t.Parallel()
++	const content = "export const value = 1;"
++	session, _ := projecttestutil.Setup(map[string]any{
++		"/src/index.ts": content,
++		"/src/tsconfig.json": `{"compilerOptions": {
++			"module": "esnext", "moduleResolution": "bundler",
++			"allowImportingTsExtensions": true, "noEmit": false
++		}}`,
++	})
++	uri := lsproto.DocumentUri("file:///src/index.ts")
++	session.DidOpenFile(context.Background(), uri, 1, content, lsproto.LanguageKindTypeScript)
++	if _, err := session.GetLanguageService(context.Background(), uri); err != nil {
++		t.Fatal(err)
++	}
++	configured := session.Snapshot().ProjectCollection.ConfiguredProject(tspath.Path("/src/tsconfig.json"))
++	if configured == nil {
++		t.Fatal("configured source must belong to its configured project")
++	}
++	for _, diagnostic := range configured.GetProgram().GetProgramDiagnostics() {
++		if diagnostic.Code() == 5096 {
++			return
++		}
++	}
++	t.Error("explicit configured emit options must retain diagnostic 5096")
++}
+diff --git a/internal/project/project.go b/internal/project/project.go
+index 39c77aa..a61e9a0 100644
+--- a/internal/project/project.go
++++ b/internal/project/project.go
+@@ -116,0 +117 @@ func NewInferredProject(
++			NoEmit:                     core.TSTrue,

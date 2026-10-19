@@ -1,42 +1,57 @@
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 
-import { BACKEND_VERSION } from "./generated-protocol.mjs";
+import { TYPE_AWARE_PROTOCOL } from "./generated-protocol.mjs";
+import { verifyBackendArtifact } from "./backend-artifact.mjs";
 
-const REQUIRED_MAJOR = Number.parseInt(BACKEND_VERSION, 10);
-const INSTALL_HINT =
-  "run `npm ci` in tools/type-aware-sidecar so the sidecar resolves its own typescript install";
+const BACKEND = TYPE_AWARE_PROTOCOL.backend;
+const INSTALL_HINT = "run `npm ci` in tools/type-aware-sidecar for its exact typescript client";
 
-/**
- * Verify that module resolution hands the sidecar a typescript install that
- * provides the `typescript/unstable/sync` backend entry point.
- *
- * The semantic modules import that entry point statically, so an incompatible
- * resolution (for example a typescript 6 hoisted into an ancestor
- * `node_modules`) fails at link time with a bare module path instead of the
- * version conflict that caused it. This preflight runs before those imports
- * and names the resolved version, its location, and the fix. Exact
- * backend-version parity stays enforced in `protocol.mjs`.
- *
- * @param {string | URL} resolveFrom Module URL or file path to resolve from;
- *   defaults to this module so the check mirrors the semantic imports.
- */
-export const assertTypescriptBackendResolvable = (resolveFrom = import.meta.url) => {
-  const sidecarRequire = createRequire(resolveFrom);
-  let manifestPath;
+/** Select only the signed, source-qualified backend supplied by the package owner. */
+export const assertTypescriptBackendResolvable = (
+  resolveFrom = import.meta.url,
+  {
+    manifestPath = process.env.FALLOW_TYPESCRIPT_BACKEND_MANIFEST,
+    publicKey,
+    target = `${process.platform}-${process.arch}`,
+    executeVersion = (executable) => spawnSync(executable, ["--version"], { encoding: "utf8" }),
+  } = {},
+) => {
+  const require = createRequire(resolveFrom);
+  let manifest;
   try {
-    manifestPath = sidecarRequire.resolve("typescript/package.json");
-  } catch {
-    throw new Error(`typescript is not installed; ${INSTALL_HINT}`);
+    manifest = require.resolve("typescript/package.json");
+  } catch (cause) {
+    throw new Error(`typescript is not installed; ${INSTALL_HINT}`, { cause });
   }
-  const { version } = sidecarRequire(manifestPath);
-  const major = Number.parseInt(version, 10);
-  if (Number.isFinite(major) && major >= REQUIRED_MAJOR) {
-    return;
+  const { version } = require(manifest);
+  if (version !== BACKEND.client_version) {
+    throw new Error(
+      `resolved typescript ${version} from ${path.dirname(manifest)}; ` +
+      `fallow-type-aware needs client ${BACKEND.client_version}; ${INSTALL_HINT}`,
+    );
   }
-  throw new Error(
-    `resolved typescript ${version} from ${path.dirname(manifestPath)}, which lacks the ` +
-      `typescript/unstable/sync backend; fallow-type-aware needs typescript ${BACKEND_VERSION}; ` +
-      INSTALL_HINT,
-  );
+  if (!manifestPath) {
+    throw new Error("FALLOW_TYPESCRIPT_BACKEND_MANIFEST must select the signed native backend");
+  }
+  const targets = createRequire(import.meta.url)("./fork-artifact-targets.json");
+  if (!(target in targets)) throw new Error(`unsupported native backend target ${target}`);
+  const selected = verifyBackendArtifact(manifestPath, {
+    backend: BACKEND,
+    target,
+    publicKey: publicKey ?? readFileSync(new URL(BACKEND.trust_root, import.meta.url)),
+  });
+  const result = executeVersion(selected.path);
+  if (result.error) throw result.error;
+  if (result.status !== 0 || result.stdout.trim() !== `Version ${selected.version}`) {
+    throw new Error(`selected native backend did not report Version ${selected.version}`);
+  }
+  return selected;
 };
+
+let selectedBackend;
+
+/** A process/session consumes one immutable payload, including its verified identity. */
+export const getSelectedBackend = () => selectedBackend ??= assertTypescriptBackendResolvable();

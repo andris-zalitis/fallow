@@ -6,6 +6,8 @@ import test from "node:test";
 
 import { API } from "typescript/unstable/sync";
 
+import { getSelectedBackend } from "../src/backend-preflight.mjs";
+
 import { projectState } from "../src/project-state.mjs";
 
 const createRoot = () => mkdtempSync(path.join(tmpdir(), "fallow-project-state-"));
@@ -35,7 +37,7 @@ const AMBIENT_SVELTE_MODULE = `declare module "*.svelte" {
 
 const inspectProject = (files) => {
   const root = createRoot();
-  const api = new API();
+  const api = new API({ tsserverPath: getSelectedBackend().path });
   let snapshot;
   try {
     write(root, "tsconfig.json", BASE_CONFIG);
