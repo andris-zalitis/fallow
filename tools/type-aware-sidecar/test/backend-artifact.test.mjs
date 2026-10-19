@@ -32,6 +32,9 @@ const invalidArtifacts = [
   ["changed executable", (f) => writeFileSync(path.join(f.root, "tsgo"), "tampered"), /digest/u],
   ["changed notice", (f) => writeFileSync(path.join(f.root, "NOTICE.txt"), "tampered"), /digest/u],
   ["wrong source", (f) => { f.manifest.backend.source.tree = "b".repeat(40); f.save(); }, /source identity/u],
+  ["wrong native identity", (f) => { f.manifest.backend.version = "stock-version"; f.save(); }, /source identity/u],
+  ["wrong client compatibility", (f) => { f.manifest.backend.client_version = "different-client"; f.save(); }, /source identity/u],
+  ["wrong library mode", (f) => { f.manifest.backend.build.library_mode = "external"; f.save(); }, /source identity/u],
   ["wrong target", (f) => { f.manifest.target = "wrong-target"; f.save(); }, /target/u],
 ];
 for (const [label, mutate, expected] of invalidArtifacts) {
