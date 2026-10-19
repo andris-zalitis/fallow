@@ -224,6 +224,7 @@ test("generateTypeAwareProtocol writes a module that holds the manifest values",
     assert.deepEqual(generated.TYPE_AWARE_PROTOCOL.backend, manifest.backend);
     assert.equal(generated.CLIENT_VERSION, manifest.backend.client_version);
     assert.equal(generated.SIDECAR_PACKAGE, manifest.sidecar.package);
+    assert.equal(generated.BACKEND_MANIFEST_ENV, manifest.sidecar.backend_manifest_env);
     assert.ok(Object.isFrozen(generated.TYPE_AWARE_PROTOCOL));
   });
 });

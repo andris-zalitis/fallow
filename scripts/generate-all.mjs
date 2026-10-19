@@ -217,6 +217,7 @@ export const TYPE_AWARE_PROTOCOL = Object.freeze({\n\
   sidecar: {\n\
     package: ${string(manifest.sidecar.package)},\n\
     version_source: ${string(manifest.sidecar.version_source)},\n\
+    backend_manifest_env: ${string(manifest.sidecar.backend_manifest_env)},\n\
   },\n\
 });\n\
 export const WIRE_PROTOCOL_VERSION = TYPE_AWARE_PROTOCOL.wire_protocol_version;\n\
@@ -229,7 +230,8 @@ export const SESSION_ENVELOPE_TYPES = Object.freeze(TYPE_AWARE_PROTOCOL.session_
 export const BACKEND_FAMILY = TYPE_AWARE_PROTOCOL.backend.family;\n\
 export const BACKEND_VERSION = TYPE_AWARE_PROTOCOL.backend.version;\n\
 export const CLIENT_VERSION = TYPE_AWARE_PROTOCOL.backend.client_version;\n\
-export const SIDECAR_PACKAGE = TYPE_AWARE_PROTOCOL.sidecar.package;\n`,
+export const SIDECAR_PACKAGE = TYPE_AWARE_PROTOCOL.sidecar.package;\n\
+export const BACKEND_MANIFEST_ENV = TYPE_AWARE_PROTOCOL.sidecar.backend_manifest_env;\n`,
   );
 };
 

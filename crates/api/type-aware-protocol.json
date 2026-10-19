@@ -34,6 +34,7 @@
   },
   "sidecar": {
     "package": "fallow-type-aware",
-    "version_source": "workspace-package"
+    "version_source": "workspace-package",
+    "backend_manifest_env": "FALLOW_TYPESCRIPT_BACKEND_MANIFEST"
   }
 }
