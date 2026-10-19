@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 
-import { TYPE_AWARE_PROTOCOL } from "./generated-protocol.mjs";
+import { BACKEND_MANIFEST_ENV, TYPE_AWARE_PROTOCOL } from "./generated-protocol.mjs";
 import { verifyBackendArtifact } from "./backend-artifact.mjs";
 
 const BACKEND = TYPE_AWARE_PROTOCOL.backend;
@@ -13,7 +13,7 @@ const INSTALL_HINT = "run `npm ci` in tools/type-aware-sidecar for its exact typ
 export const assertTypescriptBackendResolvable = (
   resolveFrom = import.meta.url,
   {
-    manifestPath = process.env.FALLOW_TYPESCRIPT_BACKEND_MANIFEST,
+    manifestPath = process.env[BACKEND_MANIFEST_ENV],
     publicKey,
     target = `${process.platform}-${process.arch}`,
     executeVersion = (executable) => spawnSync(executable, ["--version"], { encoding: "utf8" }),
@@ -34,7 +34,7 @@ export const assertTypescriptBackendResolvable = (
     );
   }
   if (!manifestPath) {
-    throw new Error("FALLOW_TYPESCRIPT_BACKEND_MANIFEST must select the signed native backend");
+    throw new Error(`${BACKEND_MANIFEST_ENV} must select the signed native backend`);
   }
   const targets = createRequire(import.meta.url)("./fork-artifact-targets.json");
   if (!(target in targets)) throw new Error(`unsupported native backend target ${target}`);

@@ -18,8 +18,9 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use super::manifest::{
-    BACKEND_FAMILY, BACKEND_VERSION, SESSION_ENVELOPE_TYPES, SIDECAR_PACKAGE as SIDECAR_BINARY,
-    STATUS_OPERATION, WIRE_PROTOCOL_VERSION as TYPE_AWARE_PROTOCOL_VERSION,
+    BACKEND_FAMILY, BACKEND_MANIFEST_ENV, BACKEND_VERSION, SESSION_ENVELOPE_TYPES,
+    SIDECAR_PACKAGE as SIDECAR_BINARY, STATUS_OPERATION,
+    WIRE_PROTOCOL_VERSION as TYPE_AWARE_PROTOCOL_VERSION,
 };
 #[cfg(windows)]
 use discovery::canonical_sidecar_path;
@@ -500,16 +501,24 @@ mod tests {
             let output = command
                 .args(["--exact", TEST_NAME, "--nocapture"])
                 .env(MODE, "observe")
-                .env(EXPECTED, std::env::var_os(BACKEND_MANIFEST_ENV).unwrap_or_default())
+                .env(
+                    EXPECTED,
+                    std::env::var_os(BACKEND_MANIFEST_ENV).unwrap_or_default(),
+                )
                 .output()
                 .expect("run isolated environment observer");
-            assert!(output.status.success(), "{}\n{}",
-                String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
             return;
         }
         let outcomes = ["present", "absent"].map(|case| {
             let mut command = Command::new(&executable);
-            command.args(["--exact", TEST_NAME, "--nocapture"])
+            command
+                .args(["--exact", TEST_NAME, "--nocapture"])
                 .env(MODE, case)
                 .env("NODE_OPTIONS", "must not reach the companion");
             if case == "present" {
@@ -519,12 +528,19 @@ mod tests {
             }
             let output = command.output().expect("run isolated environment parent");
             if !output.status.success() {
-                eprintln!("{case}: {}\n{}", String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr));
+                eprintln!(
+                    "{case}: {}\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
             }
             output.status.success()
         });
-        assert_eq!(outcomes, [true, true], "present and absent locator must cross the real child environment correctly");
+        assert_eq!(
+            outcomes,
+            [true, true],
+            "present and absent locator must cross the real child environment correctly"
+        );
     }
 
     #[test]

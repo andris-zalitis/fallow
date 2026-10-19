@@ -1,15 +1,17 @@
 diff --git a/internal/project/inferredoptions_test.go b/internal/project/inferredoptions_test.go
 new file mode 100644
-index 0000000..923d6d4
+index 0000000..7b12257
 --- /dev/null
 +++ b/internal/project/inferredoptions_test.go
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,174 @@
 +package project_test
 +
 +import (
 +	"context"
 +	"testing"
 +
++	"github.com/microsoft/typescript-go/internal/ast"
++	"github.com/microsoft/typescript-go/internal/compiler"
 +	"github.com/microsoft/typescript-go/internal/lsp/lsproto"
 +	"github.com/microsoft/typescript-go/internal/testutil/projecttestutil"
 +	"github.com/microsoft/typescript-go/internal/tspath"
@@ -45,8 +47,49 @@ index 0000000..923d6d4
 +			if program.GetSourceFile("/src/lib.ts") == nil {
 +				t.Error("inferred analysis must retain TypeScript-extension imports")
 +			}
-+			for _, diagnostic := range program.GetProgramDiagnostics() {
-+				t.Errorf("default inferred analysis options produced diagnostic %d: %s", diagnostic.Code(), diagnostic.MessageKey())
++			if !program.Options().NoEmit.IsTrue() {
++				t.Error("default inferred analysis must enable noEmit")
++			}
++			for _, check := range []struct {
++				name        string
++				diagnostics []*ast.Diagnostic
++			}{
++				{"config", program.GetConfigFileParsingDiagnostics()},
++				{"program", program.GetProgramDiagnostics()},
++				{"syntactic", program.GetSyntacticDiagnostics(context.Background(), nil)},
++				{"bind", program.GetBindDiagnostics(context.Background(), nil)},
++			} {
++				for _, diagnostic := range check.diagnostics {
++					t.Errorf("valid default inferred %s diagnostics: %s", check.name, diagnostic.MessageKey())
++				}
++			}
++			file := program.GetSourceFile(test.path)
++			if file == nil {
++				t.Fatal("inferred program must include its opened source")
++			}
++			var reference *ast.Node
++			var visit ast.Visitor
++			visit = func(node *ast.Node) bool {
++				if ast.IsIdentifier(node) && node.Text() == "value" {
++					reference = node
++				}
++				return node.ForEachChild(visit)
++			}
++			visit(file.AsNode())
++			if reference == nil {
++				t.Fatal("fixture must contain the imported value reference")
++			}
++			checker, release := program.GetTypeCheckerForFile(context.Background(), file)
++			defer release()
++			symbol := checker.GetSymbolAtLocation(reference)
++			if symbol == nil || symbol.Flags&ast.SymbolFlagsAlias == 0 {
++				t.Fatal("the value use must resolve to the imported alias")
++			}
++			resolved := checker.GetAliasedSymbol(symbol)
++			if resolved == nil || resolved.ValueDeclaration == nil ||
++				ast.GetSourceFileOfNode(resolved.ValueDeclaration) != program.GetSourceFile("/src/lib.ts") ||
++				resolved.Name != "value" {
++				t.Error("the imported alias must resolve to the exported value declaration in lib.ts")
 +			}
 +		})
 +	}
@@ -71,12 +114,69 @@ index 0000000..923d6d4
 +	if configured == nil {
 +		t.Fatal("configured source must belong to its configured project")
 +	}
++	if !configured.GetProgram().Options().NoEmit.IsFalse() {
++		t.Error("configured noEmit:false must remain authoritative")
++	}
 +	for _, diagnostic := range configured.GetProgram().GetProgramDiagnostics() {
 +		if diagnostic.Code() == 5096 {
 +			return
 +		}
 +	}
 +	t.Error("explicit configured emit options must retain diagnostic 5096")
++}
++
++func TestInferredDefaultCorrectionRetainsStructuralFailures(t *testing.T) {
++	t.Parallel()
++	for _, test := range []struct {
++		name    string
++		content string
++		config  string
++		channel string
++	}{
++		{"malformed source", "export const value = ;", "", "syntactic"},
++		{"malformed config", "export const value = 1;", "{ invalid json", "config"},
++		{"missing configured source", "export const value = 1;", `{"compilerOptions":{"noEmit":true},"files":["index.ts","missing.ts"]}`, "program"},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			t.Parallel()
++			files := map[string]any{"/src/index.ts": test.content}
++			if test.config != "" {
++				files["/src/tsconfig.json"] = test.config
++			}
++			session, _ := projecttestutil.Setup(files)
++			uri := lsproto.DocumentUri("file:///src/index.ts")
++			session.DidOpenFile(context.Background(), uri, 1, test.content, lsproto.LanguageKindTypeScript)
++			if _, err := session.GetLanguageService(context.Background(), uri); err != nil {
++				t.Fatal(err)
++			}
++			var program *compiler.Program
++			if test.config == "" {
++				inferred := session.Snapshot().ProjectCollection.InferredProject()
++				if inferred == nil {
++					t.Fatal("malformed unconfigured source must retain inferred ownership")
++				}
++				program = inferred.GetProgram()
++			} else {
++				configured := session.Snapshot().ProjectCollection.ConfiguredProject(tspath.Path("/src/tsconfig.json"))
++				if configured == nil {
++					t.Fatal("invalid configured source must retain configured ownership")
++				}
++				program = configured.GetProgram()
++			}
++			var diagnostics []*ast.Diagnostic
++			switch test.channel {
++			case "syntactic":
++				diagnostics = program.GetSyntacticDiagnostics(context.Background(), nil)
++			case "config":
++				diagnostics = program.GetConfigFileParsingDiagnostics()
++			case "program":
++				diagnostics = program.GetProgramDiagnostics()
++			}
++			if len(diagnostics) == 0 {
++				t.Errorf("invalid input must retain its %s failure channel", test.channel)
++			}
++		})
++	}
 +}
 diff --git a/internal/project/project.go b/internal/project/project.go
 index 39c77aa..a61e9a0 100644
