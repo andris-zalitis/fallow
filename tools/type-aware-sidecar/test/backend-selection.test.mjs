@@ -17,7 +17,9 @@ test("every real API entry requires an explicitly selected native backend", () =
   const calls = [
     ["preflight", () => assertTypescriptBackendResolvable()],
     ["one-shot", () => analyzeSemanticQueries({
-      root, projects: [], queries: [], evidenceLimit: 1,
+      root, projects: [],
+      queries: [{ id: 0, operation: "api-surface", entry_points: [], private_leak_candidates: [] }],
+      evidenceLimit: 1,
       referenceScope: {
         kind: "graph", mode: "production", sources: ["index.ts"],
         roots: [{ path: "index.ts", role: "runtime" }], fingerprint: "a".repeat(64),
