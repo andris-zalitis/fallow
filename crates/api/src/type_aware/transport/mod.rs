@@ -515,7 +515,7 @@ mod tests {
             );
             return;
         }
-        let outcomes = ["present", "absent"].map(|case| {
+        let outputs = ["present", "absent"].map(|case| {
             let mut command = Command::new(&executable);
             command
                 .args(["--exact", TEST_NAME, "--nocapture"])
@@ -526,20 +526,17 @@ mod tests {
             } else {
                 command.env_remove(BACKEND_MANIFEST_ENV);
             }
-            let output = command.output().expect("run isolated environment parent");
-            if !output.status.success() {
-                eprintln!(
-                    "{case}: {}\n{}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
-            output.status.success()
+            command.output().expect("run isolated environment parent")
         });
+        let outcomes = outputs.each_ref().map(|output| output.status.success());
         assert_eq!(
             outcomes,
             [true, true],
-            "present and absent locator must cross the real child environment correctly"
+            "present and absent locator must cross the real child environment correctly: {:#?}",
+            outputs.map(|output| (
+                String::from_utf8_lossy(&output.stdout).into_owned(),
+                String::from_utf8_lossy(&output.stderr).into_owned(),
+            ))
         );
     }
 
