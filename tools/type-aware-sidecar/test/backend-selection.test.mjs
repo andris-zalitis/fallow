@@ -43,6 +43,7 @@ test("every real API entry requires an explicitly selected native backend", () =
         };
       }
     });
+    console.log("BACKEND_SELECTION_OUTCOMES=" + JSON.stringify(outcomes));
     assert.deepEqual(outcomes, calls.map(([entry]) => ({
       entry, refusedMissingSelection: true,
     })));
