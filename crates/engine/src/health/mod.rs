@@ -124,6 +124,7 @@ pub fn shared_parse_data_from_artifacts(
     let mut results = results.clone();
     results.restore_cascade_findings();
     let analysis_output = graph.map(|graph| DeadCodeAnalysisArtifacts {
+        reference_scope: None,
         results: results.clone(),
         timings: None,
         graph: Some(graph),

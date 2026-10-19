@@ -372,15 +372,15 @@ fn run_dead_code_with_changed_files(
         envelope,
     } = run;
     resolved.ensure_not_cancelled("dead-code analysis")?;
-    let mut results = analyze_session_dead_code(session)?;
-    let unfiltered_unused_files = results.unused_files.clone();
+    let analysis = analyze_session_dead_code(session)?;
+    let mut results = analysis.results;
     let finished = finish_dead_code_results(
         DeadCodeReportInputs {
             options,
             resolved,
             session,
             changed_files,
-            unfiltered_unused_files,
+            reference_scope: analysis.reference_scope.as_ref(),
             finding_ids: None,
         },
         &mut results,
@@ -405,8 +405,8 @@ fn analyze_dead_code_results(
     finding_ids: Option<fallow_engine::dead_code::FindingIdFilter>,
 ) -> ProgrammaticResult<(AnalysisResults, FinishedDeadCode)> {
     resolved.ensure_not_cancelled("dead-code analysis")?;
-    let mut results = analyze_session_dead_code(session)?;
-    let unfiltered_unused_files = results.unused_files.clone();
+    let analysis = analyze_session_dead_code(session)?;
+    let mut results = analysis.results;
 
     let finished = finish_dead_code_results(
         DeadCodeReportInputs {
@@ -414,7 +414,7 @@ fn analyze_dead_code_results(
             resolved,
             session,
             changed_files: None,
-            unfiltered_unused_files,
+            reference_scope: analysis.reference_scope.as_ref(),
             finding_ids,
         },
         &mut results,
@@ -423,10 +423,9 @@ fn analyze_dead_code_results(
     Ok((results, finished))
 }
 
-fn analyze_session_dead_code(session: &AnalysisSession) -> ProgrammaticResult<AnalysisResults> {
+fn analyze_session_dead_code(session: &AnalysisSession) -> ProgrammaticResult<fallow_engine::dead_code::DeadCodeAnalysis> {
     session
         .analyze_dead_code()
-        .map(|analysis| analysis.results)
         .map_err(|err| {
             map_engine_error(
                 &err,
@@ -502,7 +501,6 @@ pub(super) fn run_dead_code_with_session_artifacts(
                 "dead-code",
             )
         })?;
-    let unfiltered_unused_files = artifacts.results.unused_files.clone();
 
     let finished = finish_dead_code_results(
         DeadCodeReportInputs {
@@ -510,7 +508,7 @@ pub(super) fn run_dead_code_with_session_artifacts(
             resolved,
             session,
             changed_files,
-            unfiltered_unused_files,
+            reference_scope: artifacts.reference_scope.as_ref(),
             finding_ids: None,
         },
         &mut artifacts.results,
@@ -530,14 +528,13 @@ pub(super) fn run_dead_code_from_artifacts(
     mut artifacts: DeadCodeAnalysisArtifacts,
     start: Instant,
 ) -> ProgrammaticResult<DeadCodeProgrammaticRunWithArtifacts> {
-    let unfiltered_unused_files = artifacts.results.unused_files.clone();
     let finished = finish_dead_code_results(
         DeadCodeReportInputs {
             options,
             resolved,
             session,
             changed_files,
-            unfiltered_unused_files,
+            reference_scope: artifacts.reference_scope.as_ref(),
             finding_ids: None,
         },
         &mut artifacts.results,
@@ -556,9 +553,8 @@ struct DeadCodeReportInputs<'a> {
     resolved: &'a ProgrammaticAnalysisContext,
     session: &'a AnalysisSession,
     changed_files: Option<&'a FxHashSet<std::path::PathBuf>>,
-    /// Unused files as the engine reported them, before scope narrowing, which
-    /// type-aware refinement needs to reason about the whole project.
-    unfiltered_unused_files: Vec<fallow_types::output_dead_code::UnusedFileFinding>,
+    /// Native reference domain before finding presentation filters.
+    reference_scope: Option<&'a fallow_types::semantic::ReferenceScope>,
     /// The requested finding ids, when the caller asked for some. The trace
     /// starts on the full result set, before the scope.
     finding_ids: Option<fallow_engine::dead_code::FindingIdFilter>,
@@ -609,7 +605,7 @@ fn finish_dead_code_results(
         resolved,
         session,
         changed_files,
-        unfiltered_unused_files,
+        reference_scope,
         finding_ids,
     } = inputs;
     let mut finding_id_trace =
@@ -633,12 +629,12 @@ fn finish_dead_code_results(
     if let Some(trace) = finding_id_trace.as_mut() {
         trace.end_stage(results);
     }
-    let type_aware_meta = refine_with_unfiltered_unused_files(
+    let type_aware_meta = refine_programmatic_with_rules(
         &options.analysis.type_aware,
         &options.filters,
         session,
         results,
-        unfiltered_unused_files,
+        reference_scope,
     )?;
     if type_aware_meta.is_some() {
         // Refinement can add findings, such as private-type leaks, anywhere in
@@ -653,18 +649,15 @@ fn finish_dead_code_results(
     })
 }
 
-fn refine_with_unfiltered_unused_files(
+fn refine_programmatic_with_rules(
     options: &crate::TypeAwareOptions,
     filters: &DeadCodeFilters,
     session: &AnalysisSession,
     results: &mut AnalysisResults,
-    unfiltered_unused_files: Vec<fallow_types::output_dead_code::UnusedFileFinding>,
+    reference_scope: Option<&fallow_types::semantic::ReferenceScope>,
 ) -> ProgrammaticResult<Option<fallow_types::envelope::TypeAwareMeta>> {
-    let reported_unused_files =
-        std::mem::replace(&mut results.unused_files, unfiltered_unused_files);
     let outcome =
-        crate::type_aware::refine_programmatic_dead_code(options, filters, session, results);
-    results.unused_files = reported_unused_files;
+        crate::type_aware::refine_programmatic_dead_code(options, filters, session, reference_scope, results);
     if options.requested() {
         // Reconciliation can add findings, so rule severities are resolved
         // again over the refined set. The pass removes findings and writes

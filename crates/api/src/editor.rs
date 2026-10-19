@@ -265,6 +265,8 @@ pub type EditorAnalysisResults = fallow_types::results::AnalysisResults;
 /// so LSP and future editor adapters do not depend on engine result structs.
 #[derive(Debug)]
 pub struct EditorDeadCodeAnalysisOutput {
+    /// Native graph reference domain retained with these findings.
+    pub reference_scope: Option<fallow_types::semantic::ReferenceScope>,
     /// Typed dead-code findings from the analysis.
     pub results: EditorAnalysisResults,
     /// Retained per-module parse artifacts; `None` unless the run was asked
@@ -277,6 +279,7 @@ pub struct EditorDeadCodeAnalysisOutput {
 impl EditorDeadCodeAnalysisOutput {
     fn from_engine(output: fallow_engine::dead_code::DeadCodeAnalysisOutput) -> Self {
         Self {
+            reference_scope: output.reference_scope,
             results: output.results,
             modules: output.modules,
             files: output.files,
@@ -571,6 +574,7 @@ impl EditorAnalysisSession {
             options,
             filters,
             &self.inner,
+            output.reference_scope.as_ref(),
             &mut output.results,
         )?;
         // Reconciliation can add findings, so rule severities are resolved
@@ -595,6 +599,7 @@ impl EditorAnalysisSession {
             options,
             filters,
             &self.inner,
+            output.reference_scope.as_ref(),
             &mut output.results,
         )?;
         fallow_engine::dead_code::apply_rule_severities(&mut output.results, self.inner.config());

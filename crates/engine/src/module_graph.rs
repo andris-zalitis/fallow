@@ -51,6 +51,38 @@ impl RetainedModuleGraph {
         StaticTestCoverage::new(&self.inner)
     }
 
+    /// Project the active native reference domain before any finding filters.
+    #[must_use]
+    pub fn reference_scope(&self, config: &fallow_config::ResolvedConfig) -> crate::EngineResult<fallow_types::semantic::ReferenceScope> {
+        use fallow_types::semantic::{ReferenceRoot, ReferenceRootRole, ReferenceScope, ReferenceScopeMode};
+        use sha2::{Digest, Sha256};
+        let mut nodes = self.inner.modules.iter().map(|node| {
+            let relative = node.path.strip_prefix(&config.root).map_err(|_| crate::engine_error(
+                format!("native reference source {} is outside graph root {}", node.path.display(), config.root.display())
+            ))?;
+            Ok((relative.to_string_lossy().replace('\\', "/"), node.is_entry_point(), node.is_reachable(),
+                node.is_runtime_reachable(), node.is_test_reachable()))
+        }).collect::<crate::EngineResult<Vec<_>>>()?;
+        nodes.sort();
+        let sources = nodes.iter().filter(|(_, _, reachable, runtime, _)| if config.production { *runtime } else { *reachable })
+            .map(|(path, ..)| path.clone()).collect();
+        let roots = nodes.iter().filter(|(_, entry, ..)| *entry).map(|(path, _, _, runtime, _)| ReferenceRoot {
+            path: path.clone(), role: if *runtime { ReferenceRootRole::Runtime } else { ReferenceRootRole::Test },
+        }).collect();
+        let mut digest = Sha256::new();
+        digest.update(config.cache_config_hash.to_le_bytes());
+        digest.update([u8::from(config.production)]);
+        for (path, entry, reachable, runtime, test) in &nodes {
+            digest.update((path.len() as u64).to_le_bytes());
+            digest.update(path.as_bytes());
+            digest.update([u8::from(*entry), u8::from(*reachable), u8::from(*runtime), u8::from(*test)]);
+        }
+        Ok(ReferenceScope::Graph {
+            mode: if config.production { ReferenceScopeMode::Production } else { ReferenceScopeMode::All },
+            sources, roots, fingerprint: format!("{:x}", digest.finalize()),
+        })
+    }
+
     /// Number of modules in the retained graph.
     #[must_use]
     pub fn module_count(&self) -> usize {

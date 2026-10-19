@@ -48,11 +48,7 @@ const project = (run) => {
     rmSync(root, { recursive: true, force: true });
   }
 };
-// Exercise the scanner independently of wire validation for the RED control.
-const semanticInput = (raw) => {
-  const { reference_scope: referenceScope, ...existingRequest } = raw;
-  return { ...parseRequest(existingRequest), referenceScope };
-};
+const semanticInput = (raw) => parseRequest(raw);
 
 for (const excluded of ["a-caller.ts", "z-caller.ts"]) {
   test(`native scope excludes a real ordinary-file caller (${excluded}) before evidence collection`, () => project((root) => {
@@ -106,4 +102,33 @@ test("persistent requests recompute evidence when only native scope changes", ()
   } finally {
     session.close();
   }
+}));
+
+test("eligible JS and MJS callers share declaration identity across compiler projects", () => project((root) => {
+  for (const [directory, file] of [["client", "consumer.js"], ["dev", "tool.mjs"]]) {
+    write(root, `${directory}/tsconfig.json`, JSON.stringify({ compilerOptions: { strict: true, allowJs: true, checkJs: true }, include: [file] }));
+    write(root, `${directory}/${file}`, "import { worker } from '../src/worker.js';\nworker.execute();\n");
+  }
+  const raw = request(root, scope(["src/index.ts", "src/worker.ts", "client/consumer.js", "dev/tool.mjs"]));
+  raw.projects.push("client/tsconfig.json", "dev/tsconfig.json");
+  const response = analyzeSemanticQueries(parseRequest(raw));
+  assert.equal(response.results[0].assertion, "confirmed-used");
+  assert.equal(response.results[0].data.total_reference_count, 2);
+  assert.equal(response.sourceScanCount, 4);
+  assert.equal(response.referenceScopeCoverage.fingerprint, raw.reference_scope.fingerprint);
+  assert.equal(response.referenceScopeCoverage.source_count, 4);
+  assert.equal(response.referenceScopeCoverage.candidate_count, 1);
+  assert.deepEqual(response.referenceScopeCoverage.owning_projects, ["client/tsconfig.json", "dev/tsconfig.json", "tsconfig.json"]);
+}));
+
+test("scope sources without a complete compiler owner fail the requested analysis", () => project((root) => {
+  const raw = request(root, scope(["src/index.ts", "src/worker.ts", "src/missing.ts"]));
+  assert.throws(() => analyzeSemanticQueries(parseRequest(raw)), /no complete owning compiler project/);
+}));
+
+test("eligible re-export and type syntax do not manufacture a member invocation", () => project((root) => {
+  write(root, "src/barrel.ts", "export { Worker } from './worker';\nimport type { Worker } from './worker';\nexport type Port = Pick<Worker, 'execute'>;\n");
+  const response = analyzeSemanticQueries(parseRequest(request(root, scope(["src/index.ts", "src/worker.ts", "src/barrel.ts"]))));
+  assert.equal(response.results[0].assertion, "confirmed-no-static-references");
+  assert.equal(response.results[0].data.total_reference_count, 0);
 }));

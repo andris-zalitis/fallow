@@ -24,6 +24,7 @@ use fallow_types::semantic::{
     SemanticSourceLocation, SemanticSymbol, SemanticSymbolImpact, SemanticSymbolTrace,
     TypeCouplingCycle, TypeCouplingEdge, TypeCouplingFile, TypeCouplingReport, TypeCouplingSummary,
 };
+use fallow_types::semantic::{ReferenceScope, SemanticReferenceCoverage};
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -49,6 +50,7 @@ const MAX_PRIVATE_LEAK_CANDIDATES: usize = 25_000;
 #[derive(Debug, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SemanticRequest {
+    reference_scope: ReferenceScope,
     protocol_version: u32,
     operation: &'static str,
     root: String,
@@ -144,6 +146,7 @@ impl SemanticOperation {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SemanticResponse {
+    reference_scope: SemanticReferenceCoverage,
     protocol_version: u32,
     operation: String,
     sidecar_version: String,
@@ -553,6 +556,7 @@ const fn semantic_completeness_rank(completeness: SemanticCompleteness) -> u8 {
 )]
 pub fn refine_dead_code_results(
     root: &Path,
+    reference_scope: Option<&ReferenceScope>,
     results: &mut AnalysisResults,
     projects: &[PathBuf],
     entry_points: &[PathBuf],
@@ -562,6 +566,7 @@ pub fn refine_dead_code_results(
 ) -> Result<Option<SemanticDeadCodeOutcome>, TypeAwareError> {
     let outcome = refine_dead_code_results_with_transport(
         root,
+        reference_scope,
         results,
         projects,
         entry_points,
@@ -585,6 +590,7 @@ pub fn refine_dead_code_results_in_session(
     session: &mut super::transport::TypeAwareSession,
     changes: Option<&super::transport::TypeAwareFileChanges>,
     root: &Path,
+    reference_scope: Option<&ReferenceScope>,
     results: &mut AnalysisResults,
     projects: &[PathBuf],
     entry_points: &[PathBuf],
@@ -594,6 +600,7 @@ pub fn refine_dead_code_results_in_session(
 ) -> Result<Option<SemanticDeadCodeOutcome>, TypeAwareError> {
     let outcome = refine_dead_code_results_with_transport(
         root,
+        reference_scope,
         results,
         projects,
         entry_points,
@@ -630,6 +637,7 @@ enum SemanticRequestTransport<'a> {
 )]
 fn refine_dead_code_results_with_transport(
     root: &Path,
+    reference_scope: Option<&ReferenceScope>,
     results: &mut AnalysisResults,
     projects: &[PathBuf],
     entry_points: &[PathBuf],
@@ -638,6 +646,9 @@ fn refine_dead_code_results_with_transport(
     include_type_coupling: bool,
     transport: SemanticRequestTransport<'_>,
 ) -> Result<Option<SemanticDeadCodeOutcome>, TypeAwareError> {
+    let Some(reference_scope @ ReferenceScope::Graph { .. }) = reference_scope else {
+        return Err(TypeAwareError::from("dead-code semantic analysis requires the native graph reference scope"));
+    };
     if !include_symbol_use {
         discard_unverified_semantic_candidates(results);
     }
@@ -676,6 +687,7 @@ fn refine_dead_code_results_with_transport(
         return Ok(Some(empty_semantic_outcome(requested_capabilities)));
     }
     let request = SemanticRequest {
+        reference_scope: reference_scope.clone(),
         protocol_version: PROTOCOL_VERSION,
         operation: OPERATION,
         root: canonical_root.to_string_lossy().into_owned(),
@@ -723,6 +735,7 @@ fn empty_semantic_outcome(mut capabilities: Vec<SemanticCapability>) -> Semantic
     SemanticDeadCodeOutcome {
         type_aware: TypeAwareOutcome {
             meta: TypeAwareMeta {
+                reference_scope: None,
                 identity: Some(identity),
                 executed: false,
                 protocol_version: PROTOCOL_VERSION,
@@ -964,6 +977,7 @@ pub fn inspect_symbol(
         ))
     })?;
     let request = SemanticRequest {
+        reference_scope: ReferenceScope::CompilerProgram,
         protocol_version: PROTOCOL_VERSION,
         operation: OPERATION,
         root: canonical_root.to_string_lossy().into_owned(),
@@ -1071,6 +1085,7 @@ fn inspect_type_aware_outcome(
     let warnings = response.warnings.clone();
     TypeAwareOutcome {
         meta: TypeAwareMeta {
+            reference_scope: Some(response.reference_scope.clone()),
             identity: Some(identity),
             required_completeness: None,
             queries: response.results.iter().map(query_summary).collect(),
@@ -1284,6 +1299,7 @@ fn build_coupling_outcome(
         .collect();
     let type_aware = TypeAwareOutcome {
         meta: TypeAwareMeta {
+            reference_scope: Some(response.reference_scope.clone()),
             identity: Some(report.identity.clone()),
             required_completeness: None,
             queries: vec![query],
@@ -1333,6 +1349,7 @@ fn run_single_query(
         ))
     })?;
     let request = SemanticRequest {
+        reference_scope: ReferenceScope::CompilerProgram,
         protocol_version: PROTOCOL_VERSION,
         operation: OPERATION,
         root: canonical_root.to_string_lossy().into_owned(),
@@ -1464,6 +1481,20 @@ fn validate_response(
             "unsupported type-aware backend version {}; expected {BACKEND_VERSION}",
             response.backend_version
         )));
+    }
+    let candidate_count = request.queries.iter().filter(|query| matches!(query,
+        SemanticQuery::SymbolUse { .. } | SemanticQuery::SymbolTrace { .. } | SemanticQuery::SymbolImpact { .. }
+    )).count();
+    let (fingerprint, source_count) = match &request.reference_scope {
+        ReferenceScope::Graph { fingerprint, sources, .. } => (Some(fingerprint), sources.len()),
+        ReferenceScope::CompilerProgram => (None, 0),
+    };
+    if response.reference_scope.fingerprint.as_ref() != fingerprint
+        || response.reference_scope.source_count != source_count
+        || response.reference_scope.candidate_count != candidate_count
+        || (matches!(request.reference_scope, ReferenceScope::Graph { .. }) && (source_count > 0 || candidate_count > 0) && response.reference_scope.owning_projects.is_empty())
+    {
+        return Err(TypeAwareError::from("type-aware response did not attest the requested reference scope and complete candidate coverage"));
     }
     let expected = request
         .queries
@@ -2544,6 +2575,7 @@ mod tests {
     fn request_with_all_operations(root: &Path) -> SemanticRequest {
         let symbol = symbol();
         SemanticRequest {
+            reference_scope: ReferenceScope::CompilerProgram,
             protocol_version: PROTOCOL_VERSION,
             operation: OPERATION,
             root: root.to_string_lossy().into_owned(),
@@ -2592,8 +2624,40 @@ mod tests {
         }
     }
 
+    #[test]
+    fn native_reference_scope_attestation_is_required_before_reconciliation() {
+        let root = Path::new("/project");
+        let mut request = request_with_all_operations(root);
+        request.reference_scope = ReferenceScope::Graph {
+            mode: fallow_types::semantic::ReferenceScopeMode::Production,
+            sources: vec!["src/source.ts".to_string()],
+            roots: Vec::new(),
+            fingerprint: "a".repeat(64),
+        };
+        let response = complete_response(&request);
+        assert!(validate_response(&request, &response).is_ok());
+        let mut wrong_scope = response.clone();
+        wrong_scope.reference_scope.fingerprint = Some("b".repeat(64));
+        assert!(validate_response(&request, &wrong_scope).is_err());
+        let mut missing_source = response.clone();
+        missing_source.reference_scope.source_count = 0;
+        assert!(validate_response(&request, &missing_source).is_err());
+        let mut missing_candidate = response.clone();
+        missing_candidate.reference_scope.candidate_count = 0;
+        assert!(validate_response(&request, &missing_candidate).is_err());
+        let mut missing_owner = response;
+        missing_owner.reference_scope.owning_projects.clear();
+        assert!(validate_response(&request, &missing_owner).is_err());
+    }
+
     fn complete_response(request: &SemanticRequest) -> SemanticResponse {
         SemanticResponse {
+            reference_scope: SemanticReferenceCoverage {
+                fingerprint: match &request.reference_scope { ReferenceScope::Graph { fingerprint, .. } => Some(fingerprint.clone()), ReferenceScope::CompilerProgram => None },
+                source_count: match &request.reference_scope { ReferenceScope::Graph { sources, .. } => sources.len(), ReferenceScope::CompilerProgram => 0 },
+                candidate_count: request.queries.iter().filter(|query| matches!(query, SemanticQuery::SymbolUse { .. } | SemanticQuery::SymbolTrace { .. } | SemanticQuery::SymbolImpact { .. })).count(),
+                owning_projects: vec!["tsconfig.json".to_string()],
+            },
             protocol_version: PROTOCOL_VERSION,
             operation: OPERATION.to_string(),
             sidecar_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -2721,6 +2785,7 @@ mod tests {
         let batch = build_dead_code_queries(root, &results, &[], true, false, false)
             .expect("semantic query batch");
         let request = SemanticRequest {
+            reference_scope: ReferenceScope::CompilerProgram,
             protocol_version: PROTOCOL_VERSION,
             operation: OPERATION,
             root: root.to_string_lossy().into_owned(),
@@ -2880,6 +2945,7 @@ mod tests {
         )
         .expect("mixed semantic query batch");
         let request = SemanticRequest {
+            reference_scope: ReferenceScope::CompilerProgram,
             protocol_version: PROTOCOL_VERSION,
             operation: OPERATION,
             root: root.to_string_lossy().into_owned(),
@@ -3759,6 +3825,7 @@ mod tests {
     fn partial_symbol_impact_preserves_valid_consumers_and_targeted_tests() {
         let target = symbol();
         let request = SemanticRequest {
+            reference_scope: ReferenceScope::CompilerProgram,
             protocol_version: PROTOCOL_VERSION,
             operation: OPERATION,
             root: ".".to_string(),
@@ -3805,6 +3872,12 @@ mod tests {
             }),
         };
         let response = SemanticResponse {
+            reference_scope: SemanticReferenceCoverage {
+                fingerprint: match &request.reference_scope { ReferenceScope::Graph { fingerprint, .. } => Some(fingerprint.clone()), ReferenceScope::CompilerProgram => None },
+                source_count: match &request.reference_scope { ReferenceScope::Graph { sources, .. } => sources.len(), ReferenceScope::CompilerProgram => 0 },
+                candidate_count: request.queries.iter().filter(|query| matches!(query, SemanticQuery::SymbolUse { .. } | SemanticQuery::SymbolTrace { .. } | SemanticQuery::SymbolImpact { .. })).count(),
+                owning_projects: vec!["tsconfig.json".to_string()],
+            },
             protocol_version: PROTOCOL_VERSION,
             operation: OPERATION.to_string(),
             sidecar_version: env!("CARGO_PKG_VERSION").to_string(),

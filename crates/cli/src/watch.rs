@@ -378,6 +378,7 @@ fn analyze_and_report(config: &fallow_config::ResolvedConfig, opts: &WatchOption
         });
         match fallow_api::refine_type_aware_results_with_config(
             config,
+            analysis.reference_scope.as_ref(),
             &mut analysis.results,
             &projects,
             &entry_points,
@@ -389,17 +390,8 @@ fn analyze_and_report(config: &fallow_config::ResolvedConfig, opts: &WatchOption
         ) {
             Ok(outcome) => outcome.map(|outcome| outcome.type_aware.meta),
             Err(error) => {
-                if config.type_aware.require == fallow_config::TypeAwareRequire::Complete {
-                    eprintln!("Type-aware analysis failed: {error}");
-                    return ExitCode::from(2);
-                }
-                let message =
-                    crate::type_aware_degrade::degraded_message(&config.root, &error.to_string());
-                eprintln!("Warning: {message}");
-                Some(crate::type_aware_degrade::degraded_meta(
-                    message,
-                    config.type_aware.require,
-                ))
+                eprintln!("Type-aware analysis failed: {error}");
+                return ExitCode::from(2);
             }
         }
     } else {

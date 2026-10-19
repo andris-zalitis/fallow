@@ -13,7 +13,7 @@ mod transport;
 use fallow_engine::session::AnalysisSession;
 use fallow_types::envelope::TypeAwareMeta;
 use fallow_types::results::AnalysisResults;
-use fallow_types::semantic::SemanticCompleteness;
+use fallow_types::semantic::{SemanticCompleteness, ReferenceScope};
 
 use crate::{DeadCodeFilters, ProgrammaticError, TypeAwareOptions};
 
@@ -42,6 +42,7 @@ pub fn refine_programmatic_dead_code(
     options: &TypeAwareOptions,
     filters: &DeadCodeFilters,
     session: &AnalysisSession,
+    reference_scope: Option<&ReferenceScope>,
     results: &mut AnalysisResults,
 ) -> Result<Option<TypeAwareMeta>, ProgrammaticError> {
     if !options.requested() {
@@ -65,6 +66,7 @@ pub fn refine_programmatic_dead_code(
     if options.require != fallow_config::TypeAwareRequire::Complete {
         let outcome = refine_configured_dead_code_results(
             session.config(),
+            reference_scope,
             results,
             &options.projects,
             &entry_points,
@@ -79,6 +81,7 @@ pub fn refine_programmatic_dead_code(
     let mut refined_results = results.clone();
     let outcome = match refine_configured_dead_code_results(
         session.config(),
+        reference_scope,
         &mut refined_results,
         &options.projects,
         &entry_points,
@@ -119,6 +122,7 @@ pub fn refine_programmatic_dead_code_in_session(
     options: &TypeAwareOptions,
     filters: &DeadCodeFilters,
     session: &AnalysisSession,
+    reference_scope: Option<&ReferenceScope>,
     results: &mut AnalysisResults,
 ) -> Result<Option<TypeAwareMeta>, ProgrammaticError> {
     if !options.requested() {
@@ -142,6 +146,7 @@ pub fn refine_programmatic_dead_code_in_session(
         semantic_session,
         changes,
         session.config(),
+        reference_scope,
         &mut refined_results,
         &options.projects,
         &entry_points,
@@ -184,6 +189,7 @@ pub fn refine_programmatic_dead_code_in_session(
 )]
 pub fn refine_configured_dead_code_results(
     config: &fallow_config::ResolvedConfig,
+    reference_scope: Option<&ReferenceScope>,
     results: &mut AnalysisResults,
     projects: &[std::path::PathBuf],
     entry_points: &[std::path::PathBuf],
@@ -193,6 +199,7 @@ pub fn refine_configured_dead_code_results(
 ) -> Result<Option<SemanticDeadCodeOutcome>, TypeAwareError> {
     let outcome = refine_dead_code_results(
         &config.root,
+        reference_scope,
         results,
         projects,
         entry_points,
@@ -215,6 +222,7 @@ pub fn refine_configured_dead_code_results_in_session(
     semantic_session: &mut TypeAwareSession,
     changes: Option<&TypeAwareFileChanges>,
     config: &fallow_config::ResolvedConfig,
+    reference_scope: Option<&ReferenceScope>,
     results: &mut AnalysisResults,
     projects: &[std::path::PathBuf],
     entry_points: &[std::path::PathBuf],
@@ -226,6 +234,7 @@ pub fn refine_configured_dead_code_results_in_session(
         semantic_session,
         changes,
         &config.root,
+        reference_scope,
         results,
         projects,
         entry_points,

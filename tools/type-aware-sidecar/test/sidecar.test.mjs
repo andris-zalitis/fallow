@@ -55,6 +55,7 @@ const write = (root, relativePath, contents) => {
 
 const semanticRequest = (root, queries, options = {}) => ({
   protocol_version: WIRE_PROTOCOL_VERSION,
+  reference_scope: { kind: "compiler-program" },
   operation: ANALYSIS_OPERATION,
   root,
   projects: options.projects ?? ["tsconfig.json"],

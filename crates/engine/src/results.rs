@@ -74,6 +74,8 @@ pub use fallow_types::results::{
 /// Typed dead-code analysis result.
 #[derive(Debug)]
 pub struct DeadCodeAnalysis {
+    /// Reference domain projected from this run's native graph.
+    pub reference_scope: Option<fallow_types::semantic::ReferenceScope>,
     /// Findings across all dead-code categories.
     pub results: AnalysisResults,
 }
@@ -90,6 +92,8 @@ pub struct DeadCodeAnalysisWithHashes {
 /// Typed dead-code analysis result with retained parser artifacts.
 #[derive(Debug)]
 pub struct DeadCodeAnalysisOutput {
+    /// Reference domain projected from this run's native graph.
+    pub reference_scope: Option<fallow_types::semantic::ReferenceScope>,
     /// Findings across all dead-code categories.
     pub results: AnalysisResults,
     /// Parsed modules retained for reuse, when the caller asked for them.
@@ -101,6 +105,8 @@ pub struct DeadCodeAnalysisOutput {
 /// Typed dead-code analysis result with all reusable pipeline artifacts.
 #[derive(Debug)]
 pub struct DeadCodeAnalysisArtifacts {
+    /// Reference domain projected from this run's native graph.
+    pub reference_scope: Option<fallow_types::semantic::ReferenceScope>,
     /// Findings across all dead-code categories.
     pub results: AnalysisResults,
     /// Per-phase pipeline timings, when the run measured them.
@@ -129,6 +135,8 @@ pub struct DeadCodeAnalysisArtifacts {
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct SharedDeadCodeAnalysisArtifacts {
+    /// Reference domain projected from this run's native graph.
+    pub reference_scope: Option<fallow_types::semantic::ReferenceScope>,
     pub results: AnalysisResults,
     pub timings: Option<trace::PipelineTimings>,
     pub graph: Option<module_graph::RetainedModuleGraph>,
@@ -151,6 +159,7 @@ impl SharedDeadCodeAnalysisArtifacts {
             owned
         });
         DeadCodeAnalysisArtifacts {
+            reference_scope: self.reference_scope,
             results: self.results,
             timings: self.timings,
             graph: self.graph,
@@ -191,6 +200,7 @@ impl ProjectAnalysisArtifacts {
     pub fn into_output(self) -> ProjectAnalysisOutput {
         ProjectAnalysisOutput {
             dead_code: DeadCodeAnalysisOutput {
+                reference_scope: self.dead_code.reference_scope,
                 results: self.dead_code.results,
                 modules: self.dead_code.modules,
                 files: self.dead_code.files,
