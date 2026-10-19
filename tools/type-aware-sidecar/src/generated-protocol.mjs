@@ -8,10 +8,11 @@ export const TYPE_AWARE_PROTOCOL = Object.freeze({
   mutant_typecheck_operation: "mutant-typecheck",
   query_operations: ["symbol-use", "symbol-trace", "api-surface", "symbol-impact", "type-coupling"],
   session_envelope_types: ["analyze", "shutdown"],
-  backend: {"family":"typescript-go","version":"7.0.2-upstroke.1","client_version":"7.0.2","source":{"repository":"https://github.com/microsoft/typescript-go.git","base_revision":"2bd066d87f5bafd315be9f40889d0a60b9e58e0b","delta_path":"scripts/fork/typescript-go.patch","tree":"660dd7df14bb09ed2fb8ad26cdc293f44cee239e"},"build":{"go_version":"go1.26.0","library_mode":"embedded"},"trust_root":"fork-trust-root.pem"},
+  backend: {"family":"typescript-go","version":"7.0.2-upstroke.1","client_version":"7.0.2","source":{"repository":"https://github.com/microsoft/typescript-go.git","base_revision":"2bd066d87f5bafd315be9f40889d0a60b9e58e0b","delta_path":"scripts/fork/typescript-go.patch","tree":"dcdcf4feddbd70de7c2109e33324124010eec7ea"},"build":{"go_version":"go1.26.0","library_mode":"embedded"},"trust_root":"fork-trust-root.pem"},
   sidecar: {
     package: "fallow-type-aware",
     version_source: "workspace-package",
+    backend_manifest_env: "FALLOW_TYPESCRIPT_BACKEND_MANIFEST",
   },
 });
 export const WIRE_PROTOCOL_VERSION = TYPE_AWARE_PROTOCOL.wire_protocol_version;
@@ -25,3 +26,4 @@ export const BACKEND_FAMILY = TYPE_AWARE_PROTOCOL.backend.family;
 export const BACKEND_VERSION = TYPE_AWARE_PROTOCOL.backend.version;
 export const CLIENT_VERSION = TYPE_AWARE_PROTOCOL.backend.client_version;
 export const SIDECAR_PACKAGE = TYPE_AWARE_PROTOCOL.sidecar.package;
+export const BACKEND_MANIFEST_ENV = TYPE_AWARE_PROTOCOL.sidecar.backend_manifest_env;
