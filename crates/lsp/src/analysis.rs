@@ -457,8 +457,8 @@ fn run_typed_project_analysis(
             session.config_path(),
             session.unmatched_config_patterns(),
         ));
-    // The type-aware pass reads `unused_files` as its set of unreachable
-    // files, so the change scope runs after it.
+    // Reconcile every candidate against the retained native reference scope
+    // before narrowing findings for presentation.
     session.apply_change_scope(&mut output, &change_scope);
     if input.inline_complexity_enabled {
         let mut findings =

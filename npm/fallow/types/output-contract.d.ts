@@ -2054,6 +2054,10 @@ analysis_run_id?: (string | null)
  */
 export interface TypeAwareMeta {
 /**
+ * Attested execution coverage of the native reference domain.
+ */
+reference_scope?: (SemanticReferenceCoverage | null)
+/**
  * Compatibility identity used by audit, baselines, snapshots, and stores.
  */
 identity?: (SemanticAnalysisIdentity | null)
@@ -2155,6 +2159,27 @@ warnings: string[]
  */
 elapsed_ms: number
 phase_timings_ms: TypeAwarePhaseTimings
+}
+/**
+ * Executed compiler coverage of the requested native reference domain.
+ */
+export interface SemanticReferenceCoverage {
+/**
+ * Exact native scope digest; absent only for compiler-domain inspections.
+ */
+fingerprint?: (string | null)
+/**
+ * Number of eligible native source identities with compiler ownership.
+ */
+source_count: number
+/**
+ * Number of symbol candidates resolved in this batch.
+ */
+candidate_count: number
+/**
+ * Complete configured/inferred projects owning the analyzed sources/candidates.
+ */
+owning_projects: string[]
 }
 /**
  * Compatibility identity for comparing two analysis results.

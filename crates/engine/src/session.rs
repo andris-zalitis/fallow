@@ -785,6 +785,7 @@ impl AnalysisSession {
     pub fn analyze_dead_code(&self) -> EngineResult<DeadCodeAnalysis> {
         self.analyze_dead_code_with_artifacts(false, false)
             .map(|output| DeadCodeAnalysis {
+                reference_scope: output.reference_scope,
                 results: output.results,
             })
     }
@@ -797,6 +798,7 @@ impl AnalysisSession {
     pub fn analyze_dead_code_with_complexity(&self) -> EngineResult<DeadCodeAnalysisOutput> {
         self.analyze_dead_code_with_artifacts(true, false)
             .map(|output| DeadCodeAnalysisOutput {
+                reference_scope: output.reference_scope,
                 results: output.results,
                 modules: output.modules,
                 files: output.files,
@@ -1695,7 +1697,9 @@ fn run_engine_owned_dead_code_pipeline(
     prelude.finish();
     let file_hashes = collect_file_hashes(&modules, discovery.files());
 
+    let reference_scope = graph.graph.reference_scope(config)?;
     Ok(SharedDeadCodeAnalysisArtifacts {
+        reference_scope: Some(reference_scope),
         results: detector.results,
         timings: profile.timings,
         graph: retain_graph.then_some(graph.graph),

@@ -2261,6 +2261,12 @@ mod tests {
         let root = PathBuf::from("/project");
         let results = AnalysisResults::default();
         let type_aware = fallow_types::envelope::TypeAwareMeta {
+            reference_scope: Some(fallow_types::semantic::SemanticReferenceCoverage {
+                fingerprint: Some("a".repeat(64)),
+                source_count: 1,
+                candidate_count: 2,
+                owning_projects: vec!["tsconfig.json".to_string()],
+            }),
             executed: true,
             identity: None,
             required_completeness: None,
@@ -2305,6 +2311,15 @@ mod tests {
         )
         .expect("type-aware metadata should serialize");
 
+        assert_eq!(
+            output["_meta"]["type_aware"]["reference_scope"],
+            serde_json::json!({
+                "fingerprint": "a".repeat(64),
+                "source_count": 1,
+                "candidate_count": 2,
+                "owning_projects": ["tsconfig.json"],
+            })
+        );
         assert_eq!(output["_meta"]["type_aware"]["backend"], "typescript-go");
         assert_eq!(
             output["_meta"]["type_aware"]["warnings"][0],

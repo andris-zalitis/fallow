@@ -56,6 +56,7 @@ fn run_analyze(
             .collect::<Vec<_>>();
         let outcome = match fallow_api::refine_type_aware_results_with_config(
             config,
+            output_struct.reference_scope.as_ref(),
             &mut results,
             &projects,
             &[],

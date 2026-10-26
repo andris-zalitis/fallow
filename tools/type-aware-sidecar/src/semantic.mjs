@@ -390,6 +390,7 @@ const symbolUseBatchState = (resolvedQueries, evidenceLimit) => {
   );
   return {
     evidenceByQuery: new Map(resolvedQueries.map(({ query }) => [query.id, []])),
+    evidenceKeysByQuery: new Map(resolvedQueries.map(({ query }) => [query.id, new Set()])),
     totalByQuery: new Map(resolvedQueries.map(({ query }) => [query.id, 0])),
     directFilesByQuery: new Map(resolvedQueries.map(({ query }) => [query.id, new Set()])),
     aliasHopTotalByQuery: new Map(resolvedQueries.map(({ query }) => [query.id, 0])),
@@ -621,10 +622,14 @@ const recordSymbolUse = (root, state, project, entry, node, namespace) => {
   const moduleEdge = moduleEdgeDeclaration(node);
   if (moduleEdge) return;
   if (!isExactExportReference(project, entry, node)) return;
+  const use = semanticUse(root, node, namespace);
+  const identity = `${sourceFileIdentity(node.getSourceFile())}:${use.line}:${use.col}:${use.namespace}:${use.role}`;
+  const seen = state.evidenceKeysByQuery.get(entry.query.id);
+  if (seen.has(identity)) return;
+  seen.add(identity);
   const evidence = state.evidenceByQuery.get(entry.query.id);
   state.totalByQuery.set(entry.query.id, state.totalByQuery.get(entry.query.id) + 1);
   state.directFilesByQuery.get(entry.query.id).add(sourceFileIdentity(node.getSourceFile()));
-  const use = semanticUse(root, node, namespace);
   if (use.via.length > 0) {
     state.aliasHopTotalByQuery.set(
       entry.query.id,
@@ -746,7 +751,7 @@ const scanSymbolUseFile = (root, state, project, sourceFile, includeDefaultImpor
   const nodes = [];
   visit(sourceFile, (node) => {
     recordDynamicImportUncertainty(state, project, node);
-    if (projectEntries.size > 0) {
+    if (projectEntries.size > 0 && !isTypePosition(node)) {
       recordStringDispatchedMemberAccess(state, projectEntries, node);
       recordComputedMemberAccess(state, project, projectEntries, node);
     }
@@ -770,28 +775,31 @@ const scanSymbolUseFile = (root, state, project, sourceFile, includeDefaultImpor
   });
 };
 
-const scanSymbolUseProjects = (root, state, projects, includeDefaultImports) => {
+const scanSymbolUseProjects = (root, state, projects, includeDefaultImports, referenceScope) => {
+  const eligible = referenceScope.kind === "graph"
+    ? new Set(referenceScope.sources.map((file) => canonicalFileIdentity(path.resolve(root, file))))
+    : undefined;
   const scannedFiles = new Set();
   let sourceScanCount = 0;
   for (const project of projects) {
     for (const sourceFile of projectSourceFiles(project)) {
       const fileIdentity = sourceFileIdentity(sourceFile);
-      if (scannedFiles.has(fileIdentity)) continue;
+      if (eligible && !eligible.has(fileIdentity)) continue;
+      if (!scannedFiles.has(fileIdentity)) sourceScanCount += 1;
       scannedFiles.add(fileIdentity);
-      sourceScanCount += 1;
       scanSymbolUseFile(root, state, project, sourceFile, includeDefaultImports);
     }
   }
   return sourceScanCount;
 };
 
-const batchSymbolUseEvidence = (root, resolvedQueries, scanProjects, evidenceLimit) => {
+const batchSymbolUseEvidence = (root, resolvedQueries, scanProjects, evidenceLimit, referenceScope) => {
   const state = symbolUseBatchState(resolvedQueries, evidenceLimit);
   resolvedQueries.forEach((entry) => registerSymbolTargets(root, state, entry));
   const includeDefaultImports = resolvedQueries.some(
     ({ query }) => query.symbol.exportedName === "default",
   );
-  const sourceScanCount = scanSymbolUseProjects(root, state, scanProjects, includeDefaultImports);
+  const sourceScanCount = scanSymbolUseProjects(root, state, scanProjects, includeDefaultImports, referenceScope);
   return {
     evidenceByQuery: state.evidenceByQuery,
     totalByQuery: state.totalByQuery,
@@ -1866,7 +1874,7 @@ const resolveSemanticQueries = ({
   return resolvedByQuery;
 };
 
-const runSymbolUseBatch = (root, queries, resolvedByQuery, semanticProjects, evidenceLimit) => {
+const runSymbolUseBatch = (root, queries, resolvedByQuery, semanticProjects, evidenceLimit, referenceScope) => {
   const resolvedSymbolUses = queries
     .filter((query) => query.symbol)
     .flatMap((query) => {
@@ -1884,7 +1892,7 @@ const runSymbolUseBatch = (root, queries, resolvedByQuery, semanticProjects, evi
       sourceScanCount: 0,
     };
   }
-  return batchSymbolUseEvidence(root, resolvedSymbolUses, semanticProjects, evidenceLimit);
+  return batchSymbolUseEvidence(root, resolvedSymbolUses, semanticProjects, evidenceLimit, referenceScope);
 };
 
 const analyzeGraphSemanticQuery = (root, query, graphStates, evidenceLimit) => {
@@ -2085,8 +2093,11 @@ const semanticProjectSelection = (snapshot, openProjects, openFiles, allowDefaul
   return { explicitProjects, selectedProjects };
 };
 
-const semanticSetup = (root, projects, queries, api, sessionState) => {
-  const openFiles = semanticOpenFiles(queries);
+const semanticSetup = (root, projects, queries, referenceScope, api, sessionState) => {
+  const openFiles = [...new Set([
+    ...semanticOpenFiles(queries),
+    ...(referenceScope.kind === "graph" ? referenceScope.sources.map((file) => path.resolve(root, file)) : []),
+  ])];
   const openProjects = semanticOpenProjects(root, projects);
   const openFileSet = new Set(openFiles);
   const openProjectSet = new Set(openProjects);
@@ -2116,7 +2127,7 @@ const semanticSetup = (root, projects, queries, api, sessionState) => {
     sessionState.openProjects = openProjectSet;
     previousSnapshot?.dispose();
   }
-  const allowDefaultFallback = projects.length === 0;
+  const allowDefaultFallback = referenceScope.kind === "graph" || projects.length === 0;
   return {
     snapshot,
     openFiles,
@@ -2136,15 +2147,45 @@ const graphProjectStates = (states, explicitProjects) => {
   return states.filter((state) => explicitProjectSet.has(state.project));
 };
 
+const attestReferenceScope = (root, scope, queries, states, resolvedByQuery) => {
+  if (scope.kind === "graph") {
+    for (const file of scope.sources) {
+      const absolute = canonicalFileIdentity(path.resolve(root, file));
+      const owners = states.filter(({ project }) => project.program.getSourceFile(absolute));
+      if (owners.length === 0 || !owners.some(({ status }) => status === "complete")) {
+        throw new Error(`reference scope source ${file} has no complete owning compiler project: ${owners.map(({ config, reason_code }) => `${config} (${reason_code})`).join(", ") || "no owner"}`);
+      }
+    }
+    for (const query of queries.filter(({ symbol }) => symbol)) {
+      if (resolvedByQuery.get(query.id)?.error || !resolvedByQuery.has(query.id)) {
+        throw new Error(`reference scope candidate ${query.id} has no complete owning compiler project`);
+      }
+    }
+  }
+  return {
+    fingerprint: scope.kind === "graph" ? scope.fingerprint : null,
+    source_count: scope.kind === "graph" ? scope.sources.length : 0,
+    candidate_count: queries.filter(({ symbol }) => symbol).length,
+    owning_projects: states.filter(({ status }) => status === "complete").map(({ config }) => config).toSorted(),
+  };
+};
+
 const executeSemanticAnalysis = ({
   root,
   projects,
   queries,
   evidenceLimit,
+  referenceScope,
   setupStartedAt,
   setup,
 }) => {
-  if (setup.selectedProjects.length === 0) return emptySemanticAnalysis(queries);
+  if (setup.selectedProjects.length === 0) {
+    if (referenceScope.kind === "graph") throw new Error("native reference scope has no owning compiler projects");
+    return {
+      ...emptySemanticAnalysis(queries),
+      referenceScopeCoverage: attestReferenceScope(root, referenceScope, queries, [], new Map()),
+    };
+  }
   const projectSetupMs = performance.now() - setupStartedAt;
   const diagnosticsStartedAt = performance.now();
   const states = semanticStates(root, projects, setup.selectedProjects);
@@ -2163,12 +2204,14 @@ const executeSemanticAnalysis = ({
   const semanticProjects = states
     .filter((state) => state.status === "complete")
     .map((state) => state.project);
+  const referenceScopeCoverage = attestReferenceScope(root, referenceScope, queries, states, resolvedByQuery);
   const symbolUseBatch = runSymbolUseBatch(
     root,
     queries,
     resolvedByQuery,
     semanticProjects,
     evidenceLimit,
+    referenceScope,
   );
   const context = {
     root,
@@ -2182,6 +2225,7 @@ const executeSemanticAnalysis = ({
   recordProjectOutcomes(states, queries, resolvedByQuery, results);
   recordProgramReuse(states, graphStates, queries, resolvedByQuery);
   return {
+    referenceScopeCoverage,
     selectedTsconfigs: states.map((state) => state.config),
     projectResults: states.map(projectResult),
     results,
@@ -2205,10 +2249,13 @@ const executeDisposableSemanticAnalysis = (input) => {
 };
 
 export const analyzeSemanticQueries = (
-  { root, projects, queries, evidenceLimit },
+  { root, projects, queries, evidenceLimit, referenceScope },
   { createApi = (cwd) => new API({ cwd, tsserverPath: getSelectedBackend().path }) } = {},
 ) => {
-  if (queries.length === 0) return emptyRequestedAnalysis();
+  if (queries.length === 0 && referenceScope.kind === "compiler-program") return {
+    ...emptyRequestedAnalysis(),
+    referenceScopeCoverage: attestReferenceScope(root, referenceScope, queries, [], new Map()),
+  };
   const setupStartedAt = performance.now();
   const api = createApi(root);
   try {
@@ -2217,8 +2264,9 @@ export const analyzeSemanticQueries = (
       projects,
       queries,
       evidenceLimit,
+      referenceScope,
       setupStartedAt,
-      setup: semanticSetup(root, projects, queries, api),
+      setup: semanticSetup(root, projects, queries, referenceScope, api),
     });
   } finally {
     api.close();
@@ -2250,8 +2298,9 @@ export const createSemanticSession = (root, { createApi = (cwd) => new API({ cwd
         projects: request.projects,
         queries: request.queries,
         evidenceLimit: request.evidenceLimit,
+        referenceScope: request.referenceScope,
         setupStartedAt,
-        setup: semanticSetup(root, request.projects, request.queries, api, state),
+        setup: semanticSetup(root, request.projects, request.queries, request.referenceScope, api, state),
       });
       const invalidationKind = fileChanges?.invalidateAll
         ? "full"

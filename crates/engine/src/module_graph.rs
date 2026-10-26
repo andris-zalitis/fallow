@@ -5,6 +5,7 @@
     reason = "engine graph helpers use FxHashSet changed-file sets consistently with the rest of fallow"
 )]
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use fallow_output::TestAdjacency;
@@ -49,6 +50,93 @@ impl RetainedModuleGraph {
     /// Borrow the shared static test-coverage view for health analysis.
     pub(crate) const fn static_test_coverage(&self) -> StaticTestCoverage<'_> {
         StaticTestCoverage::new(&self.inner)
+    }
+
+    /// Project the active native reference domain before any finding filters.
+    pub fn reference_scope(
+        &self,
+        config: &fallow_config::ResolvedConfig,
+    ) -> crate::EngineResult<fallow_types::semantic::ReferenceScope> {
+        use fallow_types::semantic::{
+            ReferenceRoot, ReferenceRootRole, ReferenceScope, ReferenceScopeMode,
+        };
+        use sha2::{Digest, Sha256};
+        let mut nodes = self
+            .inner
+            .modules
+            .iter()
+            .map(|node| {
+                let relative = node.path.strip_prefix(&config.root).map_err(|_| {
+                    crate::engine_error(format!(
+                        "native reference source {} is outside graph root {}",
+                        node.path.display(),
+                        config.root.display()
+                    ))
+                })?;
+                Ok((relative.to_string_lossy().replace('\\', "/"), node))
+            })
+            .collect::<crate::EngineResult<Vec<_>>>()?;
+        nodes.sort_by(|(left, _), (right, _)| left.cmp(right));
+        let sources = nodes
+            .iter()
+            .filter(|(_, node)| {
+                oxc_span::SourceType::from_path(&node.path).is_ok()
+                    && !fallow_graph::graph::is_declaration_file_path(&node.path)
+                    && if config.production {
+                        node.is_runtime_reachable()
+                    } else {
+                        node.is_reachable()
+                    }
+            })
+            .map(|(path, _)| path.clone())
+            .collect();
+        let roots = nodes
+            .iter()
+            .flat_map(|(path, node)| {
+                [
+                    (ReferenceRootRole::Runtime, &self.inner.runtime_entry_points),
+                    (ReferenceRootRole::Test, &self.inner.test_entry_points),
+                ]
+                .into_iter()
+                .filter(move |(_, ids)| ids.contains(&node.file_id))
+                .map(move |(role, _)| ReferenceRoot {
+                    path: path.clone(),
+                    role,
+                })
+            })
+            .collect();
+        let mut digest = Sha256::new();
+        digest.update(config.cache_config_hash.to_le_bytes());
+        digest.update([u8::from(config.production)]);
+        for (path, node) in &nodes {
+            digest.update((path.len() as u64).to_le_bytes());
+            digest.update(path.as_bytes());
+            digest.update([
+                u8::from(node.is_entry_point()),
+                u8::from(node.is_reachable()),
+                u8::from(node.is_runtime_reachable()),
+                u8::from(node.is_test_reachable()),
+                u8::from(self.inner.runtime_entry_points.contains(&node.file_id)),
+                u8::from(self.inner.test_entry_points.contains(&node.file_id)),
+            ]);
+        }
+        let fingerprint = digest
+            .finalize()
+            .iter()
+            .fold(String::new(), |mut hex, byte| {
+                let _ = write!(hex, "{byte:02x}");
+                hex
+            });
+        Ok(ReferenceScope::Graph {
+            mode: if config.production {
+                ReferenceScopeMode::Production
+            } else {
+                ReferenceScopeMode::All
+            },
+            sources,
+            roots,
+            fingerprint,
+        })
     }
 
     /// Number of modules in the retained graph.
@@ -1170,6 +1258,130 @@ mod tests {
             &files,
         );
         RetainedModuleGraph::from(graph)
+    }
+
+    fn semantic_scope_fixture(
+        crossed_root: bool,
+    ) -> (RetainedModuleGraph, fallow_config::ResolvedConfig) {
+        use fallow_config::{FallowConfig, OutputFormat};
+        let paths = [
+            "app.ts",
+            "helper.ts",
+            "shared.ts",
+            "orphan.ts",
+            "theme.css",
+            "types.d.ts",
+        ];
+        let files: Vec<_> = paths
+            .iter()
+            .enumerate()
+            .map(|(id, name)| DiscoveredFile {
+                id: FileId(id as u32),
+                path: PathBuf::from("/project").join(name),
+                size_bytes: 1,
+            })
+            .collect();
+        let mut modules: Vec<_> = files
+            .iter()
+            .enumerate()
+            .map(|(id, file)| ResolvedModule {
+                file_id: file.id,
+                path: file.path.clone(),
+                resolved_imports: if id == 0 {
+                    vec![
+                        import(FileId(2), ImportedName::SideEffect),
+                        import(FileId(4), ImportedName::SideEffect),
+                        import(FileId(5), ImportedName::SideEffect),
+                    ]
+                } else if id == 1 {
+                    vec![import(FileId(2), ImportedName::SideEffect)]
+                } else {
+                    Vec::new()
+                },
+                ..ResolvedModule::default()
+            })
+            .collect();
+        if crossed_root {
+            modules[0]
+                .resolved_imports
+                .push(import(FileId(1), ImportedName::SideEffect));
+        }
+        let runtime = vec![EntryPoint {
+            path: files[0].path.clone(),
+            source: EntryPointSource::PackageJsonMain,
+        }];
+        let tests = vec![EntryPoint {
+            path: files[1].path.clone(),
+            source: EntryPointSource::TestFile,
+        }];
+        let roots = [runtime.clone(), tests.clone()].concat();
+        let graph =
+            RetainedModuleGraph::from(ModuleGraph::build_with_reachability_roots_and_replacements(
+                &modules,
+                &[],
+                &roots,
+                &runtime,
+                &tests,
+                &files,
+            ));
+        let config = FallowConfig::default().resolve(
+            PathBuf::from("/project"),
+            OutputFormat::Json,
+            1,
+            true,
+            true,
+            None,
+        );
+        (graph, config)
+    }
+
+    #[test]
+    fn semantic_reference_scope_preserves_root_roles_when_runtime_reaches_test_root() {
+        use fallow_types::semantic::{ReferenceRootRole, ReferenceScope};
+        let (graph, config) = semantic_scope_fixture(true);
+        let ReferenceScope::Graph { roots, .. } = graph.reference_scope(&config).expect("scope")
+        else {
+            panic!("graph scope")
+        };
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0].path, "app.ts");
+        assert_eq!(roots[0].role, ReferenceRootRole::Runtime);
+        assert_eq!(roots[1].path, "helper.ts");
+        assert_eq!(roots[1].role, ReferenceRootRole::Test);
+    }
+
+    #[test]
+    fn semantic_reference_scope_comes_from_native_root_roles_and_reachability() {
+        use fallow_types::semantic::{ReferenceRootRole, ReferenceScope, ReferenceScopeMode};
+        let (graph, mut config) = semantic_scope_fixture(false);
+        config.production = true;
+        let production = graph.reference_scope(&config).expect("native projection");
+        let ReferenceScope::Graph {
+            mode,
+            sources,
+            roots,
+            fingerprint,
+        } = &production
+        else {
+            panic!("graph scope")
+        };
+        assert_eq!(*mode, ReferenceScopeMode::Production);
+        assert_eq!(sources, &["app.ts", "shared.ts"]);
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0].role, ReferenceRootRole::Runtime);
+        assert_eq!(roots[1].role, ReferenceRootRole::Test);
+        assert_eq!(fingerprint.len(), 64);
+        config.production = false;
+        let ReferenceScope::Graph {
+            sources,
+            fingerprint: all_fingerprint,
+            ..
+        } = graph.reference_scope(&config).expect("all projection")
+        else {
+            panic!("graph scope")
+        };
+        assert_eq!(sources, ["app.ts", "helper.ts", "shared.ts"]);
+        assert_ne!(&all_fingerprint, fingerprint);
     }
 
     #[test]

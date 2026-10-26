@@ -265,6 +265,8 @@ pub type EditorAnalysisResults = fallow_types::results::AnalysisResults;
 /// so LSP and future editor adapters do not depend on engine result structs.
 #[derive(Debug)]
 pub struct EditorDeadCodeAnalysisOutput {
+    /// Native graph reference domain retained with these findings.
+    pub reference_scope: Option<fallow_types::semantic::ReferenceScope>,
     /// Typed dead-code findings from the analysis.
     pub results: EditorAnalysisResults,
     /// Retained per-module parse artifacts; `None` unless the run was asked
@@ -277,6 +279,7 @@ pub struct EditorDeadCodeAnalysisOutput {
 impl EditorDeadCodeAnalysisOutput {
     fn from_engine(output: fallow_engine::dead_code::DeadCodeAnalysisOutput) -> Self {
         Self {
+            reference_scope: output.reference_scope,
             results: output.results,
             modules: output.modules,
             files: output.files,
@@ -571,6 +574,7 @@ impl EditorAnalysisSession {
             options,
             filters,
             &self.inner,
+            output.reference_scope.as_ref(),
             &mut output.results,
         )?;
         // Reconciliation can add findings, so rule severities are resolved
@@ -595,7 +599,7 @@ impl EditorAnalysisSession {
             options,
             filters,
             &self.inner,
-            &mut output.results,
+            output,
         )?;
         fallow_engine::dead_code::apply_rule_severities(&mut output.results, self.inner.config());
         Ok(meta)
@@ -622,7 +626,7 @@ impl EditorAnalysisSession {
     ///
     /// Dead-code still runs with full graph context, and the dead-code
     /// findings keep full scope until the type-aware pass has run. That pass
-    /// reads `unused_files` as its set of unreachable files. After the pass,
+    /// consumes the retained native graph reference scope. After the pass,
     /// call [`Self::apply_change_scope`] to narrow the dead-code findings and
     /// clone groups of this project.
     ///
@@ -653,9 +657,8 @@ impl EditorAnalysisSession {
     /// resolved change scope, with the engine functions that the CLI, MCP and
     /// Node API use.
     ///
-    /// Call it after the type-aware pass. That pass reads `unused_files` as
-    /// its set of unreachable files, so a scope before it drops evidence from
-    /// unused files outside the changed set. A multi-root editor session
+    /// Call it after the type-aware pass so reconciliation can inspect every
+    /// candidate before findings are narrowed for presentation. A multi-root editor session
     /// merges several projects, and each project has its own
     /// `ignoreFindings`. So the scope runs per project, where the config is
     /// known, and not after the merge.
@@ -791,8 +794,8 @@ impl EditorAnalysisOutput {
     ///
     /// Each project narrows its dead-code findings with its own config in
     /// [`EditorAnalysisSession::apply_change_scope`], after the
-    /// type-aware pass. The scope must come after that pass, because the pass
-    /// reads `unused_files` as its set of unreachable files. This filter then
+    /// type-aware pass, which uses the retained native reference scope before
+    /// candidate findings are narrowed for presentation. This filter then
     /// narrows the clone groups of the merged output. For the dead-code
     /// findings, it changes nothing.
     pub fn filter_by_changed_files(&mut self, changed_files: &FxHashSet<PathBuf>, root: &Path) {
@@ -960,9 +963,8 @@ pub(crate) mod tests {
         );
     }
 
-    /// The type-aware pass reads `unused_files` as its set of unreachable
-    /// files. So the analysis keeps an unused file outside the changed set,
-    /// and the scope removes it only when the caller applies it.
+    /// Analysis retains all findings for semantic reconciliation. Presentation
+    /// scope removes an unused file only when the caller applies it.
     #[test]
     fn changed_files_scope_runs_after_the_analysis_keeps_all_unused_files() {
         let temp = tempfile::tempdir().expect("temp project");
