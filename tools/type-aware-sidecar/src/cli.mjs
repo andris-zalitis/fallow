@@ -1,3 +1,4 @@
+import { getSelectedBackend } from "./backend-preflight.mjs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 
@@ -77,7 +78,7 @@ const sessionFileChanges = (value, root) => {
   };
 };
 
-const runSession = async (input, output) => {
+const runSession = async (input, output, backendIdentity) => {
   const lines = createInterface({ input, crlfDelay: Infinity });
   let session;
   let root;
@@ -114,7 +115,7 @@ const runSession = async (input, output) => {
       writeJson(output, {
         request_id: envelope.request_id,
         revision: envelope.revision,
-        response: responseFor(result, performance.now() - startedAt),
+        response: responseFor(result, performance.now() - startedAt, backendIdentity),
       });
     }
   } finally {
@@ -134,16 +135,17 @@ const isStatusRequest = (request) =>
   Object.keys(request ?? {}).length === STATUS_FIELDS.length &&
   STATUS_FIELDS.every(([name, value]) => request[name] === value);
 
-const responseFor = (result, elapsedMs) => createSemanticResponse({ ...result, elapsedMs });
+const responseFor = (result, elapsedMs, backendIdentity) =>
+  createSemanticResponse({ ...result, elapsedMs, backendIdentity });
 
-export const run = async ({ input, output, args = [] }) => {
+export const run = async ({ input, output, args = [], backendIdentity = getSelectedBackend() }) => {
   if (args.length > 0) {
     if (args.length === 1 && args[0] === "--session") {
-      await runSession(input, output);
+      await runSession(input, output, backendIdentity);
       return;
     }
     if (args.length === 1 && args[0] === "--status") {
-      writeJson(output, createStatusResponse());
+      writeJson(output, createStatusResponse(backendIdentity));
       return;
     }
     throw new Error(`unknown argument: ${args[0]}`);
@@ -151,7 +153,7 @@ export const run = async ({ input, output, args = [] }) => {
   const startedAt = performance.now();
   const rawRequest = parseJsonRequest(await readAll(input));
   if (isStatusRequest(rawRequest)) {
-    writeJson(output, createStatusResponse());
+    writeJson(output, createStatusResponse(backendIdentity));
     return;
   }
   const request = parseRequest(rawRequest);
@@ -159,10 +161,10 @@ export const run = async ({ input, output, args = [] }) => {
     const results = checkMutants(request);
     writeJson(
       output,
-      createMutantTypecheckResponse({ results, elapsedMs: performance.now() - startedAt }),
+      createMutantTypecheckResponse({ backendIdentity, results, elapsedMs: performance.now() - startedAt }),
     );
     return;
   }
   const result = analyzeSemanticQueries(request);
-  writeJson(output, responseFor(result, performance.now() - startedAt));
+  writeJson(output, responseFor(result, performance.now() - startedAt, backendIdentity));
 };

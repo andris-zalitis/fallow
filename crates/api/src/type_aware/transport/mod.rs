@@ -18,8 +18,9 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use super::manifest::{
-    BACKEND_FAMILY, BACKEND_VERSION, SESSION_ENVELOPE_TYPES, SIDECAR_PACKAGE as SIDECAR_BINARY,
-    STATUS_OPERATION, WIRE_PROTOCOL_VERSION as TYPE_AWARE_PROTOCOL_VERSION,
+    BACKEND_FAMILY, BACKEND_MANIFEST_ENV, BACKEND_VERSION, SESSION_ENVELOPE_TYPES,
+    SIDECAR_PACKAGE as SIDECAR_BINARY, STATUS_OPERATION,
+    WIRE_PROTOCOL_VERSION as TYPE_AWARE_PROTOCOL_VERSION,
 };
 #[cfg(windows)]
 use discovery::canonical_sidecar_path;
@@ -477,6 +478,66 @@ mod tests {
 
         assert!(error.contains("next to the active Fallow executable"));
         assert!(error.contains("node_modules and PATH are intentionally not searched"));
+    }
+
+    #[test]
+    fn child_backend_selection_preserves_only_the_explicit_locator() {
+        use super::super::manifest::BACKEND_MANIFEST_ENV;
+
+        const MODE: &str = "FALLOW_BACKEND_ENV_TEST_MODE";
+        const EXPECTED: &str = "FALLOW_BACKEND_ENV_TEST_EXPECTED";
+        const TEST_NAME: &str = "type_aware::transport::tests::child_backend_selection_preserves_only_the_explicit_locator";
+        let mode = std::env::var(MODE).ok();
+        if mode.as_deref() == Some("observe") {
+            let expected = std::env::var_os(EXPECTED).filter(|value| !value.is_empty());
+            assert_eq!(std::env::var_os(BACKEND_MANIFEST_ENV), expected);
+            assert!(std::env::var_os("NODE_OPTIONS").is_none());
+            return;
+        }
+        let executable = std::env::current_exe().expect("test executable");
+        if mode.is_some() {
+            let root = tempfile::tempdir().expect("temporary project directory");
+            let mut command = sidecar_command(&executable, root.path()).expect("sidecar command");
+            let output = command
+                .args(["--exact", TEST_NAME, "--nocapture"])
+                .env(MODE, "observe")
+                .env(
+                    EXPECTED,
+                    std::env::var_os(BACKEND_MANIFEST_ENV).unwrap_or_default(),
+                )
+                .output()
+                .expect("run isolated environment observer");
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let outputs = ["present", "absent"].map(|case| {
+            let mut command = Command::new(&executable);
+            command
+                .args(["--exact", TEST_NAME, "--nocapture"])
+                .env(MODE, case)
+                .env("NODE_OPTIONS", "must not reach the companion");
+            if case == "present" {
+                command.env(BACKEND_MANIFEST_ENV, "/qualified payload/manifest.json");
+            } else {
+                command.env_remove(BACKEND_MANIFEST_ENV);
+            }
+            command.output().expect("run isolated environment parent")
+        });
+        let outcomes = outputs.each_ref().map(|output| output.status.success());
+        assert_eq!(
+            outcomes,
+            [true, true],
+            "present and absent locator must cross the real child environment correctly: {:#?}",
+            outputs.map(|output| (
+                String::from_utf8_lossy(&output.stdout).into_owned(),
+                String::from_utf8_lossy(&output.stderr).into_owned(),
+            ))
+        );
     }
 
     #[test]

@@ -1,0 +1,17 @@
+{
+  "linux-x64": {
+    "goos": "linux",
+    "goarch": "amd64",
+    "rust": "x86_64-unknown-linux-gnu"
+  },
+  "linux-arm64": {
+    "goos": "linux",
+    "goarch": "arm64",
+    "rust": "aarch64-unknown-linux-gnu"
+  },
+  "darwin-arm64": {
+    "goos": "darwin",
+    "goarch": "arm64",
+    "rust": "aarch64-apple-darwin"
+  }
+}

@@ -133,6 +133,7 @@ pub(super) fn sidecar_command_with_script(
 
 fn restrict_sidecar_environment(command: &mut Command, root: &Path) {
     const ALLOWED_ENV: &[&str] = &[
+        BACKEND_MANIFEST_ENV,
         "HOME",
         "PATHEXT",
         "COMSPEC",

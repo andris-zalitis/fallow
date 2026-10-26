@@ -1,3 +1,4 @@
+import { getSelectedBackend } from "../src/backend-preflight.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
@@ -2673,6 +2674,7 @@ test("protocol v7 preserves bulk symbol-use capacity and separately bounds graph
     /graph queries exceed the 256 item limit/,
   );
   const maximalBulkResponse = createSemanticResponse({
+    backendIdentity: { family: BACKEND_FAMILY, version: BACKEND_VERSION },
     selectedTsconfigs: ["tsconfig.json"],
     projectResults: [],
     results: bulk.queries.map((query) => ({
@@ -2819,6 +2821,7 @@ test("rejects unknown request fields and absolute symbol paths", () => {
 
 test("bounds and normalizes warning text", () => {
   const response = createSemanticResponse({
+    backendIdentity: { family: BACKEND_FAMILY, version: BACKEND_VERSION },
     selectedTsconfigs: ["\u{10000}.json", "\uE000.json"],
     projectResults: [],
     results: [],
@@ -2885,7 +2888,7 @@ test("persistent semantic session invalidates changed source without stale refer
     const snapshots = [];
     const session = createSemanticSession(root, {
       createApi: (cwd) => {
-        const api = new API({ cwd });
+        const api = new API({ cwd, tsserverPath: getSelectedBackend().path });
         return {
           updateSnapshot: (params) => {
             const snapshot = api.updateSnapshot(params);

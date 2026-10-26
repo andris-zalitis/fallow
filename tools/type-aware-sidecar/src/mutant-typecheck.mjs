@@ -12,6 +12,7 @@ import path from "node:path";
 
 import { API, DiagnosticCategory } from "typescript/unstable/sync";
 
+import { getSelectedBackend } from "./backend-preflight.mjs";
 import { canonicalFileIdentity } from "./file-identity.mjs";
 
 const JAVASCRIPT_EXTENSIONS = new Set([".js", ".jsx", ".mjs", ".cjs"]);
@@ -165,7 +166,7 @@ const checkFile = (context, file) => {
 /** Type-checks each mutant of a parsed `mutant-typecheck` request. */
 export const checkMutants = (
   { root, files },
-  { createApi = (options) => new API(options) } = {},
+  { createApi = (options) => new API({ ...options, tsserverPath: getSelectedBackend().path }) } = {},
 ) => {
   if (files.length === 0) return [];
   const context = createOverlayApi(root, createApi);

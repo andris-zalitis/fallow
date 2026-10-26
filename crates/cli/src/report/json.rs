@@ -2273,7 +2273,7 @@ mod tests {
             protocol_version: 2,
             sidecar_version: Some("0.1.0".to_string()),
             backend: "typescript-go".to_string(),
-            backend_version: Some("7.0.2".to_string()),
+            backend_version: Some("7.0.2-upstroke.1".to_string()),
             selected_tsconfigs: vec!["tsconfig.json".to_string()],
             candidate_count: 2,
             confirmed_used_count: 1,

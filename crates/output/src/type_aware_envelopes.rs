@@ -72,7 +72,7 @@ mod tests {
             package_version: Some("3.8.1".to_string()),
             protocol_version: 7,
             backend_family: Some("typescript-go".to_string()),
-            backend_version: Some("7.0.2".to_string()),
+            backend_version: Some("7.0.2-upstroke.1".to_string()),
             remediation: None,
         })
         .expect("type-aware status should serialize");

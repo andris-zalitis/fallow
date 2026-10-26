@@ -25,6 +25,14 @@ struct ProtocolManifest {
 struct Backend {
     family: String,
     version: String,
+    #[serde(rename = "client_version")]
+    _client_version: String,
+    #[serde(rename = "source")]
+    _source: serde_json::Value,
+    #[serde(rename = "build")]
+    _build: serde_json::Value,
+    #[serde(rename = "trust_root")]
+    _trust_root: String,
 }
 
 #[derive(Deserialize)]
@@ -32,6 +40,7 @@ struct Backend {
 struct Sidecar {
     package: String,
     version_source: String,
+    backend_manifest_env: String,
 }
 
 #[derive(Deserialize)]
@@ -125,7 +134,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
          pub(super) const SESSION_ENVELOPE_TYPES: &[&str] = &[{}];\n\
          pub(super) const BACKEND_FAMILY: &str = {};\n\
          pub(super) const BACKEND_VERSION: &str = {};\n\
-         pub(super) const SIDECAR_PACKAGE: &str = {};\n",
+         pub(super) const SIDECAR_PACKAGE: &str = {};\n\
+         pub(super) const BACKEND_MANIFEST_ENV: &str = {};\n",
         manifest.wire_protocol_version,
         manifest.semantic_schema_version,
         rust_string(&manifest.analysis_operation),
@@ -136,6 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         rust_string(&manifest.backend.family),
         rust_string(&manifest.backend.version),
         rust_string(&manifest.sidecar.package),
+        rust_string(&manifest.sidecar.backend_manifest_env),
     );
     let output = PathBuf::from(
         env::var_os("OUT_DIR")

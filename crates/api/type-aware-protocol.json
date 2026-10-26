@@ -18,10 +18,23 @@
   ],
   "backend": {
     "family": "typescript-go",
-    "version": "7.0.2"
+    "version": "7.0.2-upstroke.1",
+    "client_version": "7.0.2",
+    "source": {
+      "repository": "https://github.com/microsoft/typescript-go.git",
+      "base_revision": "2bd066d87f5bafd315be9f40889d0a60b9e58e0b",
+      "delta_path": "scripts/fork/typescript-go.patch",
+      "tree": "dcdcf4feddbd70de7c2109e33324124010eec7ea"
+    },
+    "build": {
+      "go_version": "go1.26.0",
+      "library_mode": "embedded"
+    },
+    "trust_root": "fork-trust-root.pem"
   },
   "sidecar": {
     "package": "fallow-type-aware",
-    "version_source": "workspace-package"
+    "version_source": "workspace-package",
+    "backend_manifest_env": "FALLOW_TYPESCRIPT_BACKEND_MANIFEST"
   }
 }

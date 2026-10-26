@@ -1,12 +1,8 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 
-import { version as typescriptVersion } from "typescript";
-
 import {
   ANALYSIS_OPERATION,
-  BACKEND_FAMILY,
-  BACKEND_VERSION,
   MUTANT_TYPECHECK_OPERATION,
   QUERY_OPERATIONS as MANIFEST_QUERY_OPERATIONS,
   WIRE_PROTOCOL_VERSION,
@@ -18,17 +14,11 @@ const require = createRequire(import.meta.url);
 const { version: SIDECAR_VERSION } = require("../package.json");
 const QUERY_OPERATIONS = new Set(MANIFEST_QUERY_OPERATIONS);
 
-if (typescriptVersion !== BACKEND_VERSION) {
-  throw new Error(
-    `typescript backend version ${typescriptVersion} does not match protocol ${BACKEND_VERSION}`,
-  );
-}
-
-export const createStatusResponse = () => ({
+export const createStatusResponse = (backendIdentity) => ({
   package_version: SIDECAR_VERSION,
   protocol_version: WIRE_PROTOCOL_VERSION,
-  backend_family: BACKEND_FAMILY,
-  backend_version: BACKEND_VERSION,
+  backend_family: backendIdentity.family,
+  backend_version: backendIdentity.version,
 });
 
 const BATCH_REQUEST_KEYS = new Set([
@@ -481,6 +471,7 @@ export const parseRequest = (value) => {
 };
 
 export const createSemanticResponse = ({
+  backendIdentity,
   selectedTsconfigs,
   projectResults,
   results,
@@ -491,8 +482,8 @@ export const createSemanticResponse = ({
   protocol_version: WIRE_PROTOCOL_VERSION,
   operation: ANALYSIS_OPERATION,
   sidecar_version: SIDECAR_VERSION,
-  backend: BACKEND_FAMILY,
-  backend_version: BACKEND_VERSION,
+  backend: backendIdentity.family,
+  backend_version: backendIdentity.version,
   selected_tsconfigs: [...selectedTsconfigs].toSorted(compareText),
   projects: [...projectResults].toSorted((left, right) => compareText(left.config, right.config)),
   results: [...results]
@@ -503,12 +494,12 @@ export const createSemanticResponse = ({
   elapsed_ms: Math.max(0, Math.round(elapsedMs)),
 });
 
-export const createMutantTypecheckResponse = ({ results, elapsedMs }) => ({
+export const createMutantTypecheckResponse = ({ backendIdentity, results, elapsedMs }) => ({
   protocol_version: WIRE_PROTOCOL_VERSION,
   operation: MUTANT_TYPECHECK_OPERATION,
   sidecar_version: SIDECAR_VERSION,
-  backend: BACKEND_FAMILY,
-  backend_version: BACKEND_VERSION,
+  backend: backendIdentity.family,
+  backend_version: backendIdentity.version,
   results,
   elapsed_ms: Math.max(0, Math.round(elapsedMs)),
 });
