@@ -2485,9 +2485,11 @@ test("protocol v7 scopes literal dynamic import uncertainty to its module", () =
 
     assert.equal(response.results[0].status, "partial");
     assert.equal(response.results[0].reason_code, "dynamic-behavior");
+    assert.equal(response.results[0].data.reference_complete, false);
     assert.equal(response.results[1].status, "complete");
     assert.equal(response.results[1].assertion, "confirmed-no-static-references");
-    assert.equal(response.results[1].data.closed_world_eligible, true);
+    assert.equal(response.results[1].data.reference_complete, true);
+    assert.equal(response.results[1].data.closed_world_eligible, false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

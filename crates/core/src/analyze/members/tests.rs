@@ -493,6 +493,105 @@ fn runtime_entries_survive_disabled_finding_rules_without_framework_spelling_cre
     assert_eq!(results.semantic_runtime_entries[0].origin, SemanticRuntimeOrigin::ExplicitMember);
 }
 
+fn native_lifecycle_member_scan(
+    base: &str,
+    member: &str,
+    kind: MemberKind,
+    import_source: Option<&str>,
+    inherited: bool,
+) -> UnusedMemberResults {
+    let mut graph = build_graph(&[("/src/index.ts", true), ("/src/worker.ts", false)]);
+    graph.set_reachable(1);
+    let worker_base = if inherited { "RuntimeBase" } else { base };
+    let mut worker = make_export_with_members("Worker", vec![
+        make_member(member, kind), make_member("unusedSibling", MemberKind::ClassMethod),
+    ], Some(0));
+    worker.info.local_name = Some("Worker".to_string());
+    worker.info.super_class = Some(worker_base.to_string());
+    let mut exports = vec![worker, make_export_with_members("Other", vec![make_member(member, kind)], Some(0))];
+    let mut module = make_module_with_class_heritage(1, "Worker", Some(worker_base), &[]);
+    if inherited {
+        exports.push(TestExport { ref_from: Some(FileId(0)), info: make_export_info("RuntimeBase", Some(base)) });
+        module.class_heritage.extend(make_module_with_class_heritage(1, "RuntimeBase", Some(base), &[]).class_heritage);
+    }
+    set_exports(&mut graph, 1, &exports);
+    if let Some(source) = import_source {
+        let mut import = make_resolved_import(source, "Pointer", "Pointer", 1);
+        import.target = ResolveResult::NpmPackage(source.split('/').next().unwrap().to_string());
+        graph.resolved_modules[1].resolved_imports.push(import);
+    }
+    let line_offsets = [0, 5];
+    find_unused_members_with_public_api_entry_points(UnusedMemberScanInput {
+        graph: &graph,
+        resolved_modules: &graph.resolved_modules,
+        modules: &[module],
+        suppressions: &SuppressionContext::empty(),
+        line_offsets_by_file: &FxHashMap::from_iter([(FileId(1), line_offsets.as_slice())]),
+        user_class_member_allowlist: &[],
+        semantic_framework_candidates: &[],
+        semantic_class_members: true,
+        ignore_decorators: &[],
+        public_api_entry_points: &FxHashSet::default(),
+        lit_active: false,
+    })
+}
+
+fn assert_native_lifecycle_entry(
+    base: &str,
+    member: &str,
+    kind: MemberKind,
+    source: Option<&str>,
+    inherited: bool,
+    origin: Option<SemanticRuntimeOrigin>,
+) {
+    let results = native_lifecycle_member_scan(base, member, kind, source, inherited);
+    assert_eq!(results.class_members.len(), 3, "{base}/{member}/{inherited}");
+    let expected = origin.into_iter().map(|origin| SemanticRuntimeEntry {
+        symbol: SemanticSymbol {
+            path: PathBuf::from("/src/worker.ts"), namespace: SemanticNamespace::Value,
+            declaration_kind: if kind == MemberKind::ClassMethod { "class_method" } else { "class_property" }.to_string(),
+            exported_name: member.to_string(), local_name: member.to_string(),
+            owner: Some("Worker".to_string()), line: 2, col: 5,
+        }, origin,
+    }).collect::<Vec<_>>();
+    assert_eq!(results.runtime_entries, expected, "{base}/{member}/{inherited}");
+}
+
+#[test]
+fn runtime_entries_identify_custom_element_members_without_same_name_credit() {
+    use MemberKind::{ClassMethod, ClassProperty};
+    for (base, member, kind, origin) in [
+        ("HTMLElement", "connectedCallback", ClassMethod, Some(SemanticRuntimeOrigin::CustomElementLifecycle)),
+        ("HTMLElement", "formAssociated", ClassProperty, Some(SemanticRuntimeOrigin::CustomElementLifecycle)),
+        ("Component", "connectedCallback", ClassMethod, None),
+    ] {
+        assert_native_lifecycle_entry(base, member, kind, None, false, origin);
+    }
+}
+
+#[test]
+fn runtime_entries_identify_direct_and_transitive_error_members() {
+    for (base, inherited, origin) in [
+        ("Error", false, Some(SemanticRuntimeOrigin::ErrorRuntime)),
+        ("Error", true, Some(SemanticRuntimeOrigin::ErrorRuntime)),
+        ("Person", false, None),
+    ] {
+        assert_native_lifecycle_entry(base, "name", MemberKind::ClassProperty, None, inherited, origin);
+    }
+}
+
+#[test]
+fn runtime_entries_require_openlayers_import_provenance_through_inheritance() {
+    for (source, inherited, origin) in [
+        (Some("ol/interaction/Pointer"), false, Some(SemanticRuntimeOrigin::OpenlayersInteraction)),
+        (Some("ol/interaction"), true, Some(SemanticRuntimeOrigin::OpenlayersInteraction)),
+        (None, false, None),
+        (Some("other/interaction/Pointer"), false, None),
+    ] {
+        assert_native_lifecycle_entry("Pointer", "handleDownEvent", MemberKind::ClassMethod, source, inherited, origin);
+    }
+}
+
 fn make_resolved_import(source: &str, imported: &str, local: &str, target: u32) -> ResolvedImport {
     ResolvedImport {
         info: ImportInfo {
