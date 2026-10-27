@@ -182,7 +182,10 @@ fn member_results_in_semantic_mode(
     graph: &TestGraphFixture,
     semantic: bool,
 ) -> fallow_types::results::AnalysisResults {
-    use super::super::{MemberDetectorInput, run_member_detectors};
+    member_results_with_config(graph, &member_test_config(semantic), &SuppressionContext::empty())
+}
+
+fn member_test_config(semantic: bool) -> fallow_config::ResolvedConfig {
     use fallow_config::{FallowConfig, OutputFormat, Severity};
 
     let mut config = FallowConfig::default().resolve(
@@ -195,17 +198,29 @@ fn member_results_in_semantic_mode(
     );
     config.type_aware.enabled = semantic;
     config.rules.unused_class_members = Severity::Error;
+    config.rules.unused_enum_members = Severity::Error;
+    config.rules.unused_store_members = Severity::Warn;
+    config
+}
+
+fn member_results_with_config(
+    graph: &TestGraphFixture,
+    config: &fallow_config::ResolvedConfig,
+    suppressions: &SuppressionContext<'_>,
+) -> fallow_types::results::AnalysisResults {
+    use super::super::{MemberDetectorInput, run_member_detectors};
+
     run_member_detectors(MemberDetectorInput {
         graph,
         resolved_modules: &graph.resolved_modules,
         modules: &[],
-        config: &config,
-        suppressions: &SuppressionContext::empty(),
+        config,
+        suppressions,
         line_offsets_by_file: &FxHashMap::default(),
         user_class_members: &[],
         semantic_framework_candidates: &[],
         public_api_entry_points: &FxHashSet::default(),
-        declared_deps: &FxHashSet::default(),
+        declared_deps: &FxHashSet::from_iter(["pinia".to_string()]),
     })
 }
 
@@ -257,6 +272,144 @@ fn semantic_candidates_survive_export_visibility_and_entry_gates() {
                 ("value", MemberKind::ClassProperty)
             ]
         );
+    }
+}
+
+#[test]
+fn semantic_candidates_preserve_each_members_syntactic_visibility() {
+    let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/worker.ts", false)]);
+    set_exports(
+        &mut graph,
+        1,
+        &[make_export_with_members(
+            "Worker",
+            vec![
+                make_member("run", MemberKind::ClassMethod),
+                make_member("value", MemberKind::ClassProperty),
+                make_member("untouched", MemberKind::ClassMethod),
+                make_member("nested", MemberKind::NamespaceMember),
+            ],
+            Some(0),
+        )],
+    );
+    graph.resolved_modules[0].member_accesses = vec![MemberAccess {
+        object: "Worker".to_string(),
+        member: "run".to_string(),
+    }]
+    .into();
+    graph.resolved_modules[1].member_accesses = vec![MemberAccess {
+        object: "this".to_string(),
+        member: "value".to_string(),
+    }]
+    .into();
+
+    let ordinary = member_results_in_semantic_mode(&graph, false);
+    assert_eq!(ordinary.unused_class_members.len(), 1);
+    assert_eq!(ordinary.unused_class_members[0].member.member_name, "untouched");
+    assert!(!ordinary.unused_class_members[0].semantic_only_candidate);
+
+    let semantic = member_results_in_semantic_mode(&graph, true);
+    let mut candidates = semantic
+        .unused_class_members
+        .iter()
+        .map(|finding| {
+            assert_eq!(finding.member.path, Path::new("/src/worker.ts"));
+            assert_eq!(finding.member.parent_name, "Worker");
+            (finding.member.member_name.as_str(), finding.member.kind, finding.semantic_only_candidate)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(name, _, _)| *name);
+    assert_eq!(
+        candidates,
+        vec![
+            ("run", MemberKind::ClassMethod, true),
+            ("untouched", MemberKind::ClassMethod, false),
+            ("value", MemberKind::ClassProperty, true),
+        ]
+    );
+}
+
+#[test]
+fn semantic_class_collection_preserves_enum_and_store_visibility() {
+    for (is_entry, referenced, whole_object, classes, enums, stores) in [
+        (false, false, false, 0, 0, 0),
+        (false, true, true, 0, 0, 0),
+        (true, true, false, 0, 0, 1),
+        (false, true, false, 1, 1, 1),
+    ] {
+        let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/mixed.ts", is_entry)]);
+        graph.set_reachable(1);
+        set_exports(
+            &mut graph,
+            1,
+            &[make_export_with_members(
+                "Mixed",
+                vec![
+                    make_member("method", MemberKind::ClassMethod),
+                    make_member("variant", MemberKind::EnumMember),
+                    make_member("action", MemberKind::StoreMember),
+                ],
+                referenced.then_some(0),
+            )],
+        );
+        if whole_object {
+            graph.resolved_modules[0].whole_object_uses = vec!["Mixed".to_string()].into();
+        }
+        for semantic in [false, true] {
+            let results = member_results_in_semantic_mode(&graph, semantic);
+            assert_eq!(results.unused_class_members.len(), if semantic { 1 } else { classes });
+            assert_eq!(results.unused_enum_members.len(), enums);
+            assert_eq!(results.unused_store_members.len(), stores);
+            if let Some(finding) = results.unused_class_members.first() {
+                assert_eq!(finding.member.member_name, "method");
+                assert_eq!(finding.semantic_only_candidate, classes == 0);
+            }
+            if let Some(finding) = results.unused_enum_members.first() {
+                assert_eq!(finding.member.member_name, "variant");
+            }
+            if let Some(finding) = results.unused_store_members.first() {
+                assert_eq!(finding.member.member_name, "action");
+            }
+        }
+    }
+}
+
+#[test]
+fn semantic_candidates_respect_suppression_and_rule_severity() {
+    use crate::suppress::{IssueKind, Suppression};
+    use fallow_config::Severity;
+
+    let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/worker.ts", false)]);
+    set_exports(
+        &mut graph,
+        1,
+        &[make_export_with_members(
+            "Worker",
+            vec![
+                make_member("run", MemberKind::ClassMethod),
+                make_member("variant", MemberKind::EnumMember),
+            ],
+            Some(0),
+        )],
+    );
+    let suppressions = [Suppression::issue(1, 0, IssueKind::UnusedClassMember)];
+    let suppressed = SuppressionContext::from_map(FxHashMap::from_iter([
+        (FileId(1), suppressions.as_slice()),
+    ]));
+    for semantic in [false, true] {
+        let mut config = member_test_config(semantic);
+        let results = member_results_with_config(&graph, &config, &SuppressionContext::empty());
+        assert_eq!(results.unused_class_members.len(), 1);
+        assert_eq!(results.unused_enum_members.len(), 1);
+
+        let results = member_results_with_config(&graph, &config, &suppressed);
+        assert!(results.unused_class_members.is_empty());
+        assert_eq!(results.unused_enum_members.len(), 1);
+
+        config.rules.unused_class_members = Severity::Off;
+        let results = member_results_with_config(&graph, &config, &SuppressionContext::empty());
+        assert!(results.unused_class_members.is_empty());
+        assert_eq!(results.unused_enum_members.len(), 1);
     }
 }
 
@@ -3227,6 +3380,13 @@ fn ambiguous_star_re_exports_suppress_only_participating_member_exports() {
             .any(|member| member.parent_name == "Other" && member.member_name == "unused"),
         "an unrelated export in a contributor file must still report: {class_members:?}"
     );
+
+    let semantic = member_results_in_semantic_mode(&graph, true);
+    assert_eq!(semantic.unused_class_members.len(), 1);
+    let finding = &semantic.unused_class_members[0];
+    assert_eq!(finding.member.parent_name, "Other");
+    assert_eq!(finding.member.member_name, "unused");
+    assert!(!finding.semantic_only_candidate);
 }
 
 #[test]
