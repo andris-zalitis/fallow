@@ -178,6 +178,85 @@ fn make_self_member(name: &str) -> MemberInfo {
     }
 }
 
+fn member_results_in_semantic_mode(
+    graph: &TestGraphFixture,
+    semantic: bool,
+) -> fallow_types::results::AnalysisResults {
+    use super::super::{MemberDetectorInput, run_member_detectors};
+    use fallow_config::{FallowConfig, OutputFormat, Severity};
+
+    let mut config = FallowConfig::default().resolve(
+        PathBuf::from("/src"),
+        OutputFormat::Human,
+        1,
+        true,
+        true,
+        None,
+    );
+    config.type_aware.enabled = semantic;
+    config.rules.unused_class_members = Severity::Error;
+    run_member_detectors(MemberDetectorInput {
+        graph,
+        resolved_modules: &graph.resolved_modules,
+        modules: &[],
+        config: &config,
+        suppressions: &SuppressionContext::empty(),
+        line_offsets_by_file: &FxHashMap::default(),
+        user_class_members: &[],
+        semantic_framework_candidates: &[],
+        public_api_entry_points: &FxHashSet::default(),
+        declared_deps: &FxHashSet::default(),
+    })
+}
+
+#[test]
+fn semantic_candidates_survive_export_visibility_and_entry_gates() {
+    for (is_entry, referenced, whole_object, ordinary_count) in [
+        (false, false, false, 0),
+        (false, true, true, 0),
+        (true, true, false, 0),
+        (false, true, false, 2),
+    ] {
+        let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/worker.ts", is_entry)]);
+        graph.set_reachable(1);
+        set_exports(
+            &mut graph,
+            1,
+            &[make_export_with_members(
+                "Worker",
+                vec![
+                    make_member("run", MemberKind::ClassMethod),
+                    make_member("value", MemberKind::ClassProperty),
+                ],
+                referenced.then_some(0),
+            )],
+        );
+        if whole_object {
+            graph.resolved_modules[0].whole_object_uses = vec!["Worker".to_string()].into();
+        }
+
+        let ordinary = member_results_in_semantic_mode(&graph, false);
+        assert_eq!(ordinary.unused_class_members.len(), ordinary_count);
+        let semantic = member_results_in_semantic_mode(&graph, true);
+        assert_eq!(semantic.unused_class_members.len(), 2);
+        let mut candidates = semantic
+            .unused_class_members
+            .iter()
+            .map(|finding| {
+                assert_eq!(finding.member.path, Path::new("/src/worker.ts"));
+                assert_eq!(finding.member.parent_name, "Worker");
+                assert_eq!(finding.semantic_only_candidate, ordinary_count == 0);
+                (finding.member.member_name.as_str(), finding.member.kind)
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|(name, _)| *name);
+        assert_eq!(
+            candidates,
+            vec![("run", MemberKind::ClassMethod), ("value", MemberKind::ClassProperty)]
+        );
+    }
+}
+
 fn make_resolved_import(source: &str, imported: &str, local: &str, target: u32) -> ResolvedImport {
     ResolvedImport {
         info: ImportInfo {

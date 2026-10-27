@@ -3596,7 +3596,9 @@ mod tests {
         ));
         assert!(matches!(
             batch.targets.get(&50_001),
-            Some(QueryTarget::ApiSurface { unrequested_candidate_count: 0 })
+            Some(QueryTarget::ApiSurface {
+                unrequested_candidate_count: 0
+            })
         ));
         assert!(matches!(
             batch.queries[50_002],
