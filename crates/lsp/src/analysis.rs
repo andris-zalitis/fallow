@@ -423,7 +423,7 @@ fn run_typed_project_analysis(
             .project_root
             .canonicalize()
             .unwrap_or_else(|_| input.project_root.to_path_buf());
-        if let Err(message) = refine_type_aware_project(
+        refine_type_aware_project(
             input.type_aware_sessions,
             TypeAwareProjectRefinement {
                 canonical_root: &canonical_root,
@@ -433,18 +433,8 @@ fn run_typed_project_analysis(
                 options: &type_aware,
                 output: &mut output.dead_code,
             },
-        ) {
-            if type_aware.require == fallow_config::TypeAwareRequire::Complete {
-                return Err(ProjectAnalysisError::failed(input.project_root, message));
-            }
-            input.config_messages.push((
-                MessageType::WARNING,
-                format!(
-                    "type-aware refinement unavailable for {}: {message}; showing conservative syntactic findings",
-                    input.project_root.display()
-                ),
-            ));
-        }
+        )
+        .map_err(|message| ProjectAnalysisError::failed(input.project_root, message))?;
     }
     // A config pattern that matched nothing is a fact about the config, so
     // it becomes a diagnostic on the config file that declares it. The read

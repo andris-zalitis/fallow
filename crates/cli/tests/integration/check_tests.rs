@@ -312,7 +312,7 @@ fn dependency_override_rule_override_to_error_exits_1() {
 }
 
 #[test]
-fn empty_type_aware_candidate_set_starts_no_companion() {
+fn empty_type_aware_candidate_set_still_requires_a_working_companion() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::create_dir_all(root.join("src")).unwrap();
@@ -346,17 +346,27 @@ fn empty_type_aware_candidate_set_starts_no_companion() {
     );
 
     assert_eq!(
-        output.code, 0,
+        output.code, 2,
         "stdout: {}\nstderr: {}",
         output.stdout, output.stderr
     );
     let json = parse_json(&output);
-    assert_eq!(json["total_issues"], 0);
-    assert_eq!(json["_meta"]["type_aware"]["elapsed_ms"], 0);
-    assert_eq!(
-        json["_meta"]["type_aware"]["identity"]["capabilities"],
-        serde_json::json!(["symbol-use"])
+    assert_eq!(json["error"], true);
+    assert_eq!(json["exit_code"], 2);
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("Type-aware analysis failed")
     );
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing-type-aware-companion")
+    );
+    assert!(json.get("total_issues").is_none());
+    assert!(json.get("_meta").is_none());
 }
 
 #[test]
@@ -1968,7 +1978,7 @@ fn type_aware_trace_proves_typeof_read_through_type_only_import() {
 }
 
 #[test]
-fn filtered_type_aware_dead_code_keeps_unreachable_only_export_evidence() {
+fn filtered_type_aware_dead_code_excludes_unreachable_reference_evidence() {
     let root = fixture_path("issue-2390-trace-consistency");
     let root_arg = root.to_string_lossy();
     // `src/lonely.ts` is an unused file, so the default report hides its
@@ -1996,7 +2006,12 @@ fn filtered_type_aware_dead_code_keeps_unreachable_only_export_evidence() {
         .unwrap_or_else(|| {
             panic!("unreachable-only checker evidence must not hide helper: {report}")
         });
-    assert_eq!(helper["semantic"]["decision"], "retained-abstained");
+    assert_eq!(
+        helper["semantic"]["decision"],
+        "confirmed-no-static-references"
+    );
+    assert_eq!(helper["semantic"]["total_evidence_count"], 0);
+    assert!(helper["semantic"].get("evidence").is_none());
 }
 
 #[test]

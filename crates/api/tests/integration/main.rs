@@ -21,6 +21,7 @@ mod empty_reference_scope;
 mod health_rerun_diagnostics;
 mod schema_conformance;
 mod scope_parity;
+mod symlink_reference_scope;
 mod trace_class_member;
 mod trace_federation_sources;
 mod trace_search_visibility;

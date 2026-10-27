@@ -22,11 +22,8 @@ use plan::{CapturedHashes, CommitOutcome, FixPlan, SkippedFile};
 
 /// Compose the hard error for a `fix` run whose type-aware pass could not run.
 ///
-/// `fix` is the one surface that still stops here, so it is also the one place
-/// a user can get stuck. The failure alone does not say that: it names neither
-/// the ceiling that most often causes it nor the flag that continues without
-/// semantic evidence. Both belong in the message, the way the transport error
-/// carries its own install line.
+/// Explain the timeout setting and the explicit choice to remove code without
+/// semantic evidence, alongside the transport's own remediation.
 fn type_aware_failure_message(error: &str) -> String {
     format!(
         "Type-aware analysis failed: {error}. Raise the per-request ceiling with \
@@ -65,15 +62,8 @@ fn run_analyze(
             false,
         ) {
             Ok(outcome) => outcome,
-            // `fix` deletes code, so it fails closed where the reporting
-            // commands degrade. Degrading a report is conservative: the
-            // syntactic set is a superset, so a gate only gets stricter. The
-            // same superset applied by a mutating command is the opposite,
-            // because the extra entries are exactly the ones a working
-            // type-aware pass would have proven live and removed. Asking for
-            // `--type-aware` on a command that removes code is asking for that
-            // verification, so its absence must stop the run rather than widen
-            // the deletion.
+            // Requested semantic verification must succeed before the command
+            // can propose or apply deletions.
             Err(error) => {
                 return Err(crate::error::emit_error(
                     &type_aware_failure_message(&error.to_string()),

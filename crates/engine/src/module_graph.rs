@@ -61,44 +61,58 @@ impl RetainedModuleGraph {
             ReferenceRoot, ReferenceRootRole, ReferenceScope, ReferenceScopeMode,
         };
         use sha2::{Digest, Sha256};
-        let mut nodes = self
-            .inner
-            .modules
-            .iter()
-            .map(|node| {
-                let relative = node.path.strip_prefix(&config.root).map_err(|_| {
-                    crate::engine_error(format!(
-                        "native reference source {} is outside graph root {}",
-                        node.path.display(),
-                        config.root.display()
-                    ))
-                })?;
-                Ok((relative.to_string_lossy().replace('\\', "/"), node))
-            })
-            .collect::<crate::EngineResult<Vec<_>>>()?;
+        let root = dunce::canonicalize(&config.root).map_err(|error| {
+            crate::engine_error(format!(
+                "cannot resolve native reference root {}: {error}",
+                config.root.display()
+            ))
+        })?;
+        let mut identities = FxHashMap::<String, Vec<_>>::default();
+        for node in &self.inner.modules {
+            let canonical = dunce::canonicalize(&node.path).map_err(|error| {
+                crate::engine_error(format!(
+                    "cannot resolve native reference source {}: {error}",
+                    node.path.display()
+                ))
+            })?;
+            let relative = canonical.strip_prefix(&root).map_err(|_| {
+                crate::engine_error(format!(
+                    "native reference source {} resolves outside graph root {}",
+                    node.path.display(),
+                    root.display()
+                ))
+            })?;
+            identities
+                .entry(relative.to_string_lossy().replace('\\', "/"))
+                .or_default()
+                .push(node);
+        }
+        let mut nodes: Vec<_> = identities.into_iter().collect();
         nodes.sort_by(|(left, _), (right, _)| left.cmp(right));
-        let sources = nodes
+        let sources: Vec<_> = nodes
             .iter()
-            .filter(|(_, node)| {
-                oxc_span::SourceType::from_path(&node.path).is_ok()
-                    && !fallow_graph::graph::is_declaration_file_path(&node.path)
-                    && if config.production {
-                        node.is_runtime_reachable()
-                    } else {
-                        node.is_reachable()
-                    }
+            .filter(|(_, aliases)| {
+                aliases.iter().any(|node| {
+                    oxc_span::SourceType::from_path(&node.path).is_ok()
+                        && !fallow_graph::graph::is_declaration_file_path(&node.path)
+                        && if config.production {
+                            node.is_runtime_reachable()
+                        } else {
+                            node.is_reachable()
+                        }
+                })
             })
             .map(|(path, _)| path.clone())
             .collect();
         let roots = nodes
             .iter()
-            .flat_map(|(path, node)| {
+            .flat_map(|(path, aliases)| {
                 [
                     (ReferenceRootRole::Runtime, &self.inner.runtime_entry_points),
                     (ReferenceRootRole::Test, &self.inner.test_entry_points),
                 ]
                 .into_iter()
-                .filter(move |(_, ids)| ids.contains(&node.file_id))
+                .filter(move |(_, ids)| aliases.iter().any(|node| ids.contains(&node.file_id)))
                 .map(move |(role, _)| ReferenceRoot {
                     path: path.clone(),
                     role,
@@ -108,16 +122,25 @@ impl RetainedModuleGraph {
         let mut digest = Sha256::new();
         digest.update(config.cache_config_hash.to_le_bytes());
         digest.update([u8::from(config.production)]);
-        for (path, node) in &nodes {
+        for (path, aliases) in &nodes {
             digest.update((path.len() as u64).to_le_bytes());
             digest.update(path.as_bytes());
             digest.update([
-                u8::from(node.is_entry_point()),
-                u8::from(node.is_reachable()),
-                u8::from(node.is_runtime_reachable()),
-                u8::from(node.is_test_reachable()),
-                u8::from(self.inner.runtime_entry_points.contains(&node.file_id)),
-                u8::from(self.inner.test_entry_points.contains(&node.file_id)),
+                u8::from(sources.binary_search(path).is_ok()),
+                u8::from(aliases.iter().any(|node| node.is_entry_point())),
+                u8::from(aliases.iter().any(|node| node.is_reachable())),
+                u8::from(aliases.iter().any(|node| node.is_runtime_reachable())),
+                u8::from(aliases.iter().any(|node| node.is_test_reachable())),
+                u8::from(
+                    aliases
+                        .iter()
+                        .any(|node| self.inner.runtime_entry_points.contains(&node.file_id)),
+                ),
+                u8::from(
+                    aliases
+                        .iter()
+                        .any(|node| self.inner.test_entry_points.contains(&node.file_id)),
+                ),
             ]);
         }
         let fingerprint = digest
@@ -1262,8 +1285,13 @@ mod tests {
 
     fn semantic_scope_fixture(
         crossed_root: bool,
-    ) -> (RetainedModuleGraph, fallow_config::ResolvedConfig) {
+    ) -> (
+        tempfile::TempDir,
+        RetainedModuleGraph,
+        fallow_config::ResolvedConfig,
+    ) {
         use fallow_config::{FallowConfig, OutputFormat};
+        let directory = tempfile::tempdir().expect("project directory");
         let paths = [
             "app.ts",
             "helper.ts",
@@ -1277,10 +1305,13 @@ mod tests {
             .enumerate()
             .map(|(id, name)| DiscoveredFile {
                 id: FileId(id as u32),
-                path: PathBuf::from("/project").join(name),
+                path: directory.path().join(name),
                 size_bytes: 1,
             })
             .collect();
+        for file in &files {
+            std::fs::write(&file.path, "").expect("graph source");
+        }
         let mut modules: Vec<_> = files
             .iter()
             .enumerate()
@@ -1325,20 +1356,131 @@ mod tests {
                 &files,
             ));
         let config = FallowConfig::default().resolve(
-            PathBuf::from("/project"),
+            directory.path().to_path_buf(),
             OutputFormat::Json,
             1,
             true,
             true,
             None,
         );
-        (graph, config)
+        (directory, graph, config)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn semantic_reference_scope_canonicalizes_contained_source_links_and_roots() {
+        use fallow_config::{FallowConfig, OutputFormat};
+        use fallow_types::semantic::{ReferenceRoot, ReferenceRootRole, ReferenceScope};
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("project directory");
+        let root = directory.path().join("project");
+        std::fs::create_dir_all(root.join("src")).expect("source directory");
+        std::fs::write(
+            root.join("src/inside-target.ts"),
+            "export const live = 1;\n",
+        )
+        .expect("contained source");
+        symlink("inside-target.ts", root.join("src/inside-link.ts")).expect("source link");
+        let linked_root = directory.path().join("project-link");
+        symlink(&root, &linked_root).expect("root link");
+
+        let project = |root: &std::path::Path, names: &[&str], all_roots: bool| {
+            let files: Vec<_> = names
+                .iter()
+                .enumerate()
+                .map(|(id, name)| DiscoveredFile {
+                    id: FileId(id as u32),
+                    path: root.join(name),
+                    size_bytes: 1,
+                })
+                .collect();
+            let modules: Vec<_> = files
+                .iter()
+                .map(|file| ResolvedModule {
+                    file_id: file.id,
+                    path: file.path.clone(),
+                    ..ResolvedModule::default()
+                })
+                .collect();
+            let entry_files = &files[..if all_roots { files.len() } else { 1 }];
+            let runtime: Vec<_> = entry_files
+                .iter()
+                .map(|file| EntryPoint {
+                    path: file.path.clone(),
+                    source: EntryPointSource::PackageJsonMain,
+                })
+                .collect();
+            let tests: Vec<_> = entry_files
+                .iter()
+                .map(|file| EntryPoint {
+                    path: file.path.clone(),
+                    source: EntryPointSource::TestFile,
+                })
+                .collect();
+            let roots = [runtime.clone(), tests.clone()].concat();
+            let graph = RetainedModuleGraph::from(
+                ModuleGraph::build_with_reachability_roots_and_replacements(
+                    &modules,
+                    &[],
+                    &roots,
+                    &runtime,
+                    &tests,
+                    &files,
+                ),
+            );
+            let config = FallowConfig::default().resolve(
+                root.to_path_buf(),
+                OutputFormat::Json,
+                1,
+                true,
+                true,
+                None,
+            );
+            graph.reference_scope(&config).expect("native projection")
+        };
+        let canonical = project(&root, &["src/inside-target.ts"], true);
+        let ReferenceScope::Graph { sources, roots, .. } = &canonical else {
+            panic!("graph scope")
+        };
+        assert_eq!(sources, &["src/inside-target.ts"]);
+        assert_eq!(
+            roots,
+            &[
+                ReferenceRoot {
+                    path: "src/inside-target.ts".into(),
+                    role: ReferenceRootRole::Runtime,
+                },
+                ReferenceRoot {
+                    path: "src/inside-target.ts".into(),
+                    role: ReferenceRootRole::Test,
+                },
+            ]
+        );
+        for names in [
+            vec!["src/inside-link.ts"],
+            vec!["src/inside-link.ts", "src/inside-target.ts"],
+            vec!["src/inside-target.ts", "src/inside-link.ts"],
+        ] {
+            for project_root in [&root, &linked_root] {
+                assert_eq!(project(project_root, &names, true), canonical);
+            }
+        }
+        assert_eq!(
+            project(
+                &root,
+                &["src/inside-link.ts", "src/inside-target.ts"],
+                false,
+            ),
+            canonical,
+            "an unreachable alias cannot erase the eligible native identity"
+        );
     }
 
     #[test]
     fn semantic_reference_scope_preserves_root_roles_when_runtime_reaches_test_root() {
         use fallow_types::semantic::{ReferenceRootRole, ReferenceScope};
-        let (graph, config) = semantic_scope_fixture(true);
+        let (_directory, graph, config) = semantic_scope_fixture(true);
         let ReferenceScope::Graph { roots, .. } = graph.reference_scope(&config).expect("scope")
         else {
             panic!("graph scope")
@@ -1353,7 +1495,7 @@ mod tests {
     #[test]
     fn semantic_reference_scope_comes_from_native_root_roles_and_reachability() {
         use fallow_types::semantic::{ReferenceRootRole, ReferenceScope, ReferenceScopeMode};
-        let (graph, mut config) = semantic_scope_fixture(false);
+        let (_directory, graph, mut config) = semantic_scope_fixture(false);
         config.production = true;
         let production = graph.reference_scope(&config).expect("native projection");
         let ReferenceScope::Graph {
