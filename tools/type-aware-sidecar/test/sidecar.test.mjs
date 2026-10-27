@@ -3183,3 +3183,72 @@ test("unknown external framework package provenance abstains", () => {
     rmSync(monorepo, { recursive: true, force: true });
   }
 });
+
+test("native runtime entries preserve exact contracts without inventing references", () => {
+  const root = makeProject();
+  try {
+    write(root, "tsconfig.json", JSON.stringify({ compilerOptions: { strict: true }, include: ["src"] }));
+    const source = [
+      "export class Worker { run(): void {} }",
+      "export class Other { run(): void {} }",
+      "export function publicRun(): void {}",
+      "export const version = 1;",
+      "",
+    ].join("\n");
+    write(root, "src/worker.ts", source);
+    const queries = ["Worker", "Other"].map((owner, id) =>
+      classMemberQuery({
+        id,
+        file: "src/worker.ts",
+        owner,
+        member: "run",
+        kind: "class_method",
+        ...utf8Position(source, "run", id + 1),
+      }),
+    );
+    const publicSymbols = ["publicRun", "version"].map((name, index) => ({
+      id: index + 2,
+      operation: "symbol-use",
+      symbol: symbolIdentity({
+        source,
+        marker: name,
+        file: "src/worker.ts",
+        namespace: "value",
+        declarationKind: "export",
+        exportedName: name,
+      }),
+      framework_contracts: [],
+    }));
+    // Exercise the semantic API on the old producer too: the new wire parser
+    // must not be the baseline failure in this behavioral discriminator.
+    const parsed = parseRequest(semanticRequest(root, [...queries, ...publicSymbols]));
+    const runtimeEntries = [
+      { symbol: parsed.queries[0].symbol, origin: "explicit-member" },
+      ...parsed.queries.slice(2).map(({ symbol }) => ({ symbol, origin: "public-api" })),
+    ];
+    const request = { ...parsed, queries: parsed.queries.slice(0, 2), runtimeEntries };
+    const response = analyzeSemanticQueries(request);
+    assert.equal(response.results.length, 2);
+    const [preserved, dead] = response.results;
+    assert.equal(preserved.assertion, "contract-preserved");
+    assert.equal(preserved.data.total_reference_count, 0);
+    assert.equal(preserved.data.closed_world_eligible, false);
+    assert.equal(preserved.data.runtime_contracts.length, 1);
+    assert.equal(preserved.data.runtime_contracts[0].origin, "explicit-member");
+    assert.equal(preserved.data.runtime_contracts[0].symbol.owner, "Worker");
+    assert.equal(dead.assertion, "confirmed-no-static-references");
+    assert.deepEqual(dead.data.runtime_contracts, []);
+    assert.equal(response.referenceScopeCoverage.entry_count, 3);
+    assert.match(response.referenceScopeCoverage.entry_digest, /^[a-f0-9]{64}$/u);
+    const session = createSemanticSession(root);
+    try {
+      const persistent = session.analyze(request, { revision: 1 });
+      assert.deepEqual(persistent.results, response.results);
+      assert.deepEqual(persistent.referenceScopeCoverage, response.referenceScopeCoverage);
+    } finally {
+      session.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
