@@ -1410,16 +1410,15 @@ mod tests {
             })
             .collect();
         let roots = [runtime.clone(), tests.clone()].concat();
-        let graph = RetainedModuleGraph::from(
-            ModuleGraph::build_with_reachability_roots_and_replacements(
+        let graph =
+            RetainedModuleGraph::from(ModuleGraph::build_with_reachability_roots_and_replacements(
                 &modules,
                 &[],
                 &roots,
                 &runtime,
                 &tests,
                 &files,
-            ),
-        );
+            ));
         let config = FallowConfig::default().resolve(
             root.to_path_buf(),
             OutputFormat::Json,
@@ -1473,7 +1472,10 @@ mod tests {
             vec!["src/inside-target.ts", "src/inside-link.ts"],
         ] {
             for project_root in [&root, &linked_root] {
-                assert_eq!(project_reference_scope(project_root, &names, true), canonical);
+                assert_eq!(
+                    project_reference_scope(project_root, &names, true),
+                    canonical
+                );
             }
         }
         assert_eq!(
