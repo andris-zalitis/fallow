@@ -202,6 +202,7 @@ impl DeadCodeAuditLedger {
             render_fan_in: _render_fan_in,
             react_component_intel: _react_component_intel,
             semantic_framework_contracts: _semantic_framework_contracts,
+            semantic_runtime_entries: _semantic_runtime_entries,
         } = results;
 
         macro_rules! annotate {
@@ -671,6 +672,7 @@ impl DeadCodeKeyCollector<'_> {
             // not an issue collection; no attribution key needed.
             react_component_intel: _react_component_intel,
             semantic_framework_contracts: _semantic_framework_contracts,
+            semantic_runtime_entries: _semantic_runtime_entries,
         } = results;
 
         self.add_items(AuditCollection::PropDrillingChains, prop_drilling_chains);
@@ -1687,6 +1689,7 @@ fn classify_introduced_dead_code_fields(results: &fallow_types::results::Analysi
         // an issue collection; no key needed.
         react_component_intel: _react_component_intel,
         semantic_framework_contracts: _semantic_framework_contracts,
+        semantic_runtime_entries: _semantic_runtime_entries,
     } = results;
 }
 
