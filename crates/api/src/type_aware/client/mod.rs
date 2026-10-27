@@ -3516,6 +3516,99 @@ mod tests {
     }
 
     #[test]
+    fn semantic_class_queries_preserve_every_candidate_and_separate_nonclass_capacity() {
+        let directory = tempdir().expect("temporary directory");
+        let root = directory.path();
+        let class_count = 25_003;
+        let mut results = rollback_family_results(root);
+        results.unused_class_members = (0..class_count)
+            .map(|index| {
+                fallow_types::output_dead_code::UnusedClassMemberFinding::with_actions(
+                    fallow_types::results::UnusedMember {
+                        path: root.join("src/service.ts"),
+                        parent_name: format!("Service{index}"),
+                        member_name: format!("member{index}"),
+                        kind: if index % 2 == 0 {
+                            MemberKind::ClassMethod
+                        } else {
+                            MemberKind::ClassProperty
+                        },
+                        line: u32::try_from(index + 2).expect("source line"),
+                        col: 2,
+                    },
+                )
+            })
+            .collect();
+        results.unused_types = vec![results.unused_types[0].clone(); 25_001];
+
+        let batch = build_dead_code_queries(
+            root,
+            &results,
+            &[root.join("src/index.ts")],
+            true,
+            true,
+            true,
+        )
+        .expect("complete class queries with bounded nonclass queries");
+
+        assert_eq!(batch.queries.len(), 50_003);
+        assert_eq!(batch.targets.len(), 50_003);
+        assert_eq!(batch.capacity.unrequested_symbol_count, 4);
+        for (id, query) in batch.queries.iter().enumerate() {
+            assert_eq!(query.id(), id);
+        }
+        for (index, query) in batch.queries[..class_count].iter().enumerate() {
+            let SemanticQuery::SymbolUse { symbol, .. } = query else {
+                panic!("class candidate {index} was replaced by a graph query");
+            };
+            assert_eq!(
+                symbol,
+                &SemanticSymbol {
+                    path: PathBuf::from("src/service.ts"),
+                    namespace: SemanticNamespace::Value,
+                    declaration_kind: if index % 2 == 0 {
+                        "class_method"
+                    } else {
+                        "class_property"
+                    }
+                    .to_string(),
+                    owner: Some(format!("Service{index}")),
+                    local_name: format!("member{index}"),
+                    exported_name: format!("member{index}"),
+                    line: u32::try_from(index + 2).expect("source line"),
+                    col: 2,
+                }
+            );
+            assert!(matches!(batch.targets.get(&index),
+                Some(QueryTarget::ClassMember(target)) if *target == index));
+        }
+        assert!(matches!(
+            batch.targets.get(&class_count),
+            Some(QueryTarget::UnusedExport(0))
+        ));
+        for index in 0..24_997 {
+            assert!(matches!(batch.targets.get(&(class_count + 1 + index)),
+                Some(QueryTarget::UnusedType(target)) if *target == index));
+        }
+        assert!(matches!(
+            &batch.queries[50_001],
+            SemanticQuery::ApiSurface { private_leak_candidates, .. } if private_leak_candidates.len() == 1
+        ));
+        assert!(matches!(
+            batch.targets.get(&50_001),
+            Some(QueryTarget::ApiSurface { unrequested_candidate_count: 0 })
+        ));
+        assert!(matches!(
+            batch.queries[50_002],
+            SemanticQuery::TypeCoupling { .. }
+        ));
+        assert!(matches!(
+            batch.targets.get(&50_002),
+            Some(QueryTarget::TypeCoupling)
+        ));
+    }
+
+    #[test]
     fn type_coupling_query_requests_the_project_report_evidence_limit() {
         let directory = tempdir().expect("temporary directory");
         let root = directory.path();
