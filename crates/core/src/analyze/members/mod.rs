@@ -726,10 +726,6 @@ fn build_error_subclass_export_keys(
 /// members (Pinia `state` / `getters` / `actions` key, or a setup-store
 /// returned key) are reported separately from enum and class members because
 /// they default to `warn` (open declaration set) rather than `error`.
-#[expect(
-    clippy::struct_field_names,
-    reason = "the `_members` suffix names the member kind and reads clearly at call sites"
-)]
 pub struct UnusedMemberResults {
     /// Unused TypeScript enum members.
     pub enum_members: Vec<UnusedMember>,
