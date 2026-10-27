@@ -252,7 +252,10 @@ fn semantic_candidates_survive_export_visibility_and_entry_gates() {
         candidates.sort_by_key(|(name, _)| *name);
         assert_eq!(
             candidates,
-            vec![("run", MemberKind::ClassMethod), ("value", MemberKind::ClassProperty)]
+            vec![
+                ("run", MemberKind::ClassMethod),
+                ("value", MemberKind::ClassProperty)
+            ]
         );
     }
 }

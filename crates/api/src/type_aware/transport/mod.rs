@@ -641,6 +641,109 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn large_envelope_sidecar() -> (tempfile::TempDir, PathBuf) {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let install = tempfile::tempdir().expect("temporary sidecar install");
+        let sidecar = install.path().join("large-envelope.mjs");
+        fs::write(
+            &sidecar,
+            r#"#!/usr/bin/env node
+import fs from "node:fs";
+import readline from "node:readline";
+const session = process.argv.includes("--session");
+fs.appendFileSync("launches", "1\n");
+const reply = (request) => {
+  fs.appendFileSync("requests", "1\n");
+  return { echo: request.payload, padding: "p".repeat(request.response_bytes) };
+};
+if (session) {
+  for await (const line of readline.createInterface({ input: process.stdin })) {
+    const envelope = JSON.parse(line);
+    if (envelope.type === "shutdown") break;
+    process.stdout.write(`${JSON.stringify({
+      request_id: envelope.request_id,
+      revision: envelope.revision,
+      response: reply(envelope.request),
+    })}\n`);
+  }
+} else {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  process.stdout.write(`${JSON.stringify(reply(JSON.parse(Buffer.concat(chunks))))}\n`);
+}
+"#,
+        )
+        .expect("write recording sidecar");
+        let mut permissions = fs::metadata(&sidecar).expect("sidecar metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&sidecar, permissions).expect("executable sidecar");
+        let sidecar = sidecar.canonicalize().expect("canonical sidecar");
+        (install, sidecar)
+    }
+
+    #[cfg(unix)]
+    fn assert_complete_large_envelope(response: &serde_json::Value, install: &Path) {
+        let echo = response["echo"].as_str().expect("echoed request");
+        assert_eq!(echo, "q".repeat(8 * 1024 * 1024 + 1));
+        let padding = response["padding"].as_str().expect("full response");
+        assert_eq!(padding.len(), 32 * 1024 * 1024 + 1);
+        assert!(padding.bytes().all(|byte| byte == b'p'));
+        assert_eq!(std::fs::read_to_string(install.join("launches")).expect("launch record"), "1\n");
+        assert_eq!(std::fs::read_to_string(install.join("requests")).expect("request record"), "1\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_shot_semantic_envelopes_preserve_data_beyond_former_byte_limits() {
+        let _lifecycle_lock = lock_sidecar_lifecycle_tests();
+        let root = tempfile::tempdir().expect("temporary project");
+        let (install, sidecar) = large_envelope_sidecar();
+        let request = serde_json::json!({
+            "payload": "q".repeat(8 * 1024 * 1024 + 1),
+            "response_bytes": 32 * 1024 * 1024 + 1,
+        });
+        let response: serde_json::Value = run_sidecar_json(
+            &sidecar,
+            root.path(),
+            &request,
+            sidecar_timeout(),
+            MAX_SEMANTIC_RESPONSE_BYTES,
+        )
+        .expect("complete one-shot semantic envelope");
+        assert_complete_large_envelope(&response, install.path());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persistent_semantic_envelopes_preserve_data_beyond_former_byte_limits() {
+        let _lifecycle_lock = lock_sidecar_lifecycle_tests();
+        let root = tempfile::tempdir().expect("temporary project");
+        let root = root.path().canonicalize().expect("canonical project");
+        let (install, sidecar) = large_envelope_sidecar();
+        let process = TypeAwareSessionProcess::spawn(&sidecar, &root).expect("persistent sidecar");
+        let mut session = TypeAwareSession {
+            root: root.clone(),
+            sidecar,
+            process: Some(process),
+            request_id: 0,
+            revision: 0,
+            cancellation: None,
+        };
+        let request = serde_json::json!({
+            "payload": "q".repeat(8 * 1024 * 1024 + 1),
+            "response_bytes": 32 * 1024 * 1024 + 1,
+        });
+        let response: serde_json::Value = session
+            .run_semantic_request(&root, &request, None)
+            .expect("complete persistent semantic envelope");
+        assert_complete_large_envelope(&response, install.path());
+        assert_eq!(session.request_id, 1);
+        assert_eq!(session.revision, 1);
+    }
+
+    #[cfg(unix)]
     #[test]
     fn timeout_covers_blocked_stdin() {
         use std::fs;
