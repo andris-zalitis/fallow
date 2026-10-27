@@ -736,8 +736,7 @@ pub struct UnusedMemberResults {
     pub store_members: Vec<UnusedMember>,
 }
 
-/// A class-member candidate plus whether it only exists for semantic
-/// framework-contract validation.
+/// A class-member candidate with its ordinary syntactic visibility provenance.
 pub struct UnusedClassMemberCandidate {
     /// The candidate reported by the member scan.
     pub member: UnusedMember,
@@ -814,6 +813,9 @@ pub(super) struct UnusedMemberScanInput<'a> {
     /// Plugin rules withheld from syntactic suppression so the semantic pass
     /// can validate exact framework package provenance.
     pub(super) semantic_framework_candidates: &'a [UsedClassMemberRule],
+    /// Retain supported class declarations for the requested semantic pass,
+    /// including members hidden by the ordinary syntactic liveness rules.
+    pub(super) semantic_class_members: bool,
     pub(super) ignore_decorators: &'a [String],
     pub(super) public_api_entry_points: &'a FxHashSet<FileId>,
     /// Whether a Lit dependency is declared. When true, a `@state()`-decorated
@@ -919,16 +921,18 @@ impl MemberReportContext<'_, '_> {
         buckets: &mut MemberScanBuckets,
     ) {
         let export_name = export.name.to_string();
-        if self.export_member_scan_skipped(module, export, &export_name, store_only_scan) {
+        if self.prepared.ambiguity.contains_declaration(
+            module.file_id,
+            &export_name,
+            export.is_type_only,
+        ) {
             return;
         }
 
         let export_key = ExportKey::new(module.file_id, export_name.clone());
-        if self
-            .prepared
-            .whole_object_used_exports
-            .contains(&export_key)
-        {
+        let syntactically_hidden = self.export_member_scan_skipped(module, export, store_only_scan)
+            || self.prepared.whole_object_used_exports.contains(&export_key);
+        if syntactically_hidden && !self.input.semantic_class_members {
             return;
         }
 
@@ -937,6 +941,7 @@ impl MemberReportContext<'_, '_> {
                 module,
                 export_name: &export_name,
                 store_only_scan,
+                syntactically_hidden,
             },
             export,
             &export_key,
@@ -950,16 +955,8 @@ impl MemberReportContext<'_, '_> {
         &self,
         module: &crate::graph::ModuleNode,
         export: &crate::graph::ExportSymbol,
-        export_name: &str,
         store_only_scan: bool,
     ) -> bool {
-        if self.prepared.ambiguity.contains_declaration(
-            module.file_id,
-            export_name,
-            export.is_type_only,
-        ) {
-            return true;
-        }
         if should_skip_export_member_scan(self.input.graph, module, export) {
             return true;
         }
@@ -1021,10 +1018,12 @@ impl MemberReportContext<'_, '_> {
         skip_context: &MemberSkipContext<'_>,
         buckets: &mut MemberScanBuckets,
     ) {
-        if target.store_only_scan && member.kind != MemberKind::StoreMember {
-            return;
-        }
-        if should_skip_member_for_unused_report(member, skip_context) {
+        let syntactically_hidden = target.syntactically_hidden
+            || (target.store_only_scan && member.kind != MemberKind::StoreMember)
+            || should_skip_member_for_unused_report(member, skip_context);
+        if syntactically_hidden
+            && !(self.input.semantic_class_members && is_class_member_kind(member.kind))
+        {
             return;
         }
 
@@ -1038,21 +1037,23 @@ impl MemberReportContext<'_, '_> {
         ) else {
             return;
         };
-        let semantic_only = skip_context.semantic_framework_candidates.matches(
-            member.name.as_str(),
-            skip_context.super_class,
-            skip_context.implemented_interfaces,
-        );
+        let semantic_only = syntactically_hidden
+            || skip_context.semantic_framework_candidates.matches(
+                member.name.as_str(),
+                skip_context.super_class,
+                skip_context.implemented_interfaces,
+            );
         push_unused_member(buckets, unused, member.kind, semantic_only);
     }
 }
 
 /// Shared per-export scan target: the module, the export's rendered name, and
-/// whether this is an entry-point store-only scan.
+/// its ordinary syntactic visibility and entry-point store-only policy.
 struct MemberScanTarget<'a> {
     module: &'a crate::graph::ModuleNode,
     export_name: &'a str,
     store_only_scan: bool,
+    syntactically_hidden: bool,
 }
 
 fn push_unused_member(

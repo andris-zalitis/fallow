@@ -2617,6 +2617,7 @@ fn run_member_detectors(input: MemberDetectorInput<'_>) -> AnalysisResults {
         line_offsets_by_file: input.line_offsets_by_file,
         user_class_member_allowlist: input.user_class_members,
         semantic_framework_candidates: input.semantic_framework_candidates,
+        semantic_class_members: input.config.type_aware.enabled,
         ignore_decorators: &input.config.ignore_decorators,
         public_api_entry_points: input.public_api_entry_points,
         lit_active: input.declared_deps.contains("lit")

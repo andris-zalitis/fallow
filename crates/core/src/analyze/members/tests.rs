@@ -39,6 +39,7 @@ fn find_unused_members(
         line_offsets_by_file,
         user_class_member_allowlist,
         semantic_framework_candidates: &[],
+        semantic_class_members: false,
         ignore_decorators,
         public_api_entry_points: &FxHashSet::default(),
         lit_active: false,
