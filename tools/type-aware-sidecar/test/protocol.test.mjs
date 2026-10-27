@@ -36,12 +36,14 @@ test("class symbol-use queries retain every exact identity beyond the nonclass b
   const exports = Array.from({ length: 24_998 }, (_, index) =>
     symbolQuery(index + classes.length, "export"),
   );
-  const parsed = parseRequest(request([
-    ...classes,
-    ...exports,
-    { id: 50_001, operation: "api-surface", entry_points: [] },
-    { id: 50_002, operation: "type-coupling", entry_points: [] },
-  ]));
+  const parsed = parseRequest(
+    request([
+      ...classes,
+      ...exports,
+      { id: 50_001, operation: "api-surface", entry_points: [] },
+      { id: 50_002, operation: "type-coupling", entry_points: [] },
+    ]),
+  );
   assert.equal(parsed.queries.length, 50_003);
   for (const [index, query] of parsed.queries.entries()) {
     assert.equal(query.id, index);
@@ -73,7 +75,8 @@ test("unbounded class queries preserve validation and independent operation budg
   invalid[25_000] = { ...invalid[25_000], symbol: { ...invalid[25_000].symbol, line: 0 } };
   assert.throws(() => parseRequest(request(invalid)), /line/);
   assert.throws(
-    () => parseRequest(request(Array.from({ length: 25_001 }, (_, id) => symbolQuery(id, "export")))),
+    () =>
+      parseRequest(request(Array.from({ length: 25_001 }, (_, id) => symbolQuery(id, "export")))),
     /25000 item limit/,
   );
   for (const operation of ["symbol-trace", "symbol-impact"]) {
@@ -98,14 +101,17 @@ test("unbounded class queries preserve validation and independent operation budg
     type_name: `Private${id}`,
   }));
   assert.throws(
-    () => parseRequest(request([
-      ...classes,
-      {
-        id: classes.length,
-        operation: "api-surface",
-        private_leak_candidates: privateLeakCandidates,
-      },
-    ])),
+    () =>
+      parseRequest(
+        request([
+          ...classes,
+          {
+            id: classes.length,
+            operation: "api-surface",
+            private_leak_candidates: privateLeakCandidates,
+          },
+        ]),
+      ),
     /private_leak_candidates exceeds the 25000 item limit/,
   );
 });
