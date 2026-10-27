@@ -1,4 +1,4 @@
-//! Construction of bounded semantic requests from syntactic candidates.
+//! Complete class requests and independently bounded nonclass semantic queries.
 
 use super::*;
 
@@ -97,13 +97,7 @@ fn append_symbol_use_queries(
     queries: &mut Vec<SemanticQuery>,
     targets: &mut BTreeMap<usize, QueryTarget>,
 ) -> Result<usize, TypeAwareError> {
-    let class_count = results.unused_class_members.len().min(capacity);
-    for (index, finding) in results
-        .unused_class_members
-        .iter()
-        .take(class_count)
-        .enumerate()
-    {
+    for (index, finding) in results.unused_class_members.iter().enumerate() {
         let id = queries.len();
         queries.push(SemanticQuery::SymbolUse {
             id,
@@ -127,8 +121,7 @@ fn append_symbol_use_queries(
         targets.insert(id, QueryTarget::ClassMember(index));
     }
 
-    let remaining = capacity - class_count;
-    let export_count = results.unused_exports.len().min(remaining);
+    let export_count = results.unused_exports.len().min(capacity);
     for (index, finding) in results.unused_exports.iter().take(export_count).enumerate() {
         let id = queries.len();
         queries.push(SemanticQuery::SymbolUse {
@@ -139,7 +132,7 @@ fn append_symbol_use_queries(
         targets.insert(id, QueryTarget::UnusedExport(index));
     }
 
-    let remaining = remaining - export_count;
+    let remaining = capacity - export_count;
     let type_count = results.unused_types.len().min(remaining);
     for (index, finding) in results.unused_types.iter().take(type_count).enumerate() {
         let id = queries.len();
@@ -152,8 +145,7 @@ fn append_symbol_use_queries(
     }
 
     Ok(
-        results.unused_class_members.len() - class_count + results.unused_exports.len()
-            - export_count
+        results.unused_exports.len() - export_count
             + results.unused_types.len()
             - type_count,
     )
