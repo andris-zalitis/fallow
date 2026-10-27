@@ -1,4 +1,4 @@
-//! Persistent semantic sessions, revisions, invalidation, and bounded restart.
+//! Persistent semantic sessions, revisions, and invalidation.
 
 use super::*;
 
@@ -89,7 +89,7 @@ impl TypeAwareSessionProcess {
         })?;
         let stderr_terminator = terminator.clone();
         let stderr_reader = std::thread::spawn(move || {
-            read_bounded_stream(stderr, MAX_STDERR_BYTES, "stderr", Some(stderr_terminator))
+            read_stream(stderr, Some(MAX_STDERR_BYTES), "stderr", Some(stderr_terminator))
         });
         Ok(Self {
             _child: child,
@@ -112,7 +112,6 @@ impl TypeAwareSessionProcess {
 /// Explicitly owned semantic sidecar session for one canonical project root.
 pub struct TypeAwareSession {
     pub(super) root: PathBuf,
-    pub(super) sidecar: PathBuf,
     pub(super) process: Option<TypeAwareSessionProcess>,
     pub(super) request_id: u64,
     pub(super) revision: u64,
@@ -125,7 +124,7 @@ impl TypeAwareSession {
         Self::new_inner(root, None)
     }
 
-    /// Start a root-bound session that cannot restart after its owner cancels.
+    /// Start a root-bound session that rejects requests after its owner cancels.
     pub fn new_cancellable(
         root: &Path,
         cancellation: Arc<AtomicBool>,
@@ -159,7 +158,6 @@ impl TypeAwareSession {
         }
         Ok(Self {
             root,
-            sidecar,
             process: Some(process),
             request_id: 0,
             revision: 0,
@@ -186,24 +184,17 @@ impl TypeAwareSession {
                 root.display()
             )));
         }
-        match self.request_once(request, changes) {
-            Ok(response) => Ok(response),
-            Err(first_error) => {
-                self.restart()?;
-                let invalidate_all = TypeAwareFileChanges {
-                    invalidate_all: true,
-                    ..TypeAwareFileChanges::default()
-                };
-                self.request_once(request, Some(&invalidate_all)).map_err(|error| {
-                    TypeAwareError::from(format!(
-                        "persistent type-aware request failed after one restart: {first_error}; {error}"
-                    ))
-                })
+        let response = self.send_request(request, changes);
+        if response.is_err() {
+            if let Some(mut process) = self.process.take() {
+                process.terminate();
             }
+            self.ensure_owner_open()?;
         }
+        response
     }
 
-    fn request_once<Request, Response>(
+    fn send_request<Request, Response>(
         &mut self,
         request: &Request,
         changes: Option<&TypeAwareFileChanges>,
@@ -226,11 +217,6 @@ impl TypeAwareSession {
                 "failed to serialize persistent type-aware request: {error}"
             ))
         })?;
-        if bytes.len() > MAX_REQUEST_BYTES {
-            return Err(TypeAwareError::from(format!(
-                "persistent type-aware request exceeded the {MAX_REQUEST_BYTES} byte limit"
-            )));
-        }
         bytes.push(b'\n');
         let process = self.process.as_mut().ok_or_else(|| {
             TypeAwareError::from("persistent type-aware process is closed".to_string())
@@ -246,26 +232,18 @@ impl TypeAwareSession {
             })?;
         let timeout = SidecarTimeout::start(process.terminator.clone(), sidecar_timeout());
         let mut response_bytes = Vec::new();
-        process
-            .stdout
-            .by_ref()
-            .take((MAX_SEMANTIC_RESPONSE_BYTES + 1) as u64)
-            .read_until(b'\n', &mut response_bytes)
+        let read_result = process.stdout.read_until(b'\n', &mut response_bytes);
+        timeout.finish().map_err(TypeAwareError)?;
+        read_result
             .map_err(|error| {
                 TypeAwareError::from(format!(
                     "failed to read persistent type-aware response: {error}"
                 ))
             })?;
-        timeout.finish().map_err(TypeAwareError)?;
         if response_bytes.is_empty() {
             return Err(TypeAwareError::from(
                 "persistent type-aware sidecar closed without a response".to_string(),
             ));
-        }
-        if response_bytes.len() > MAX_SEMANTIC_RESPONSE_BYTES {
-            return Err(TypeAwareError::from(format!(
-                "persistent type-aware response exceeded the {MAX_SEMANTIC_RESPONSE_BYTES} byte limit"
-            )));
         }
         let response: SessionResponse<Response> =
             serde_json::from_slice(&response_bytes).map_err(|error| {
@@ -279,16 +257,6 @@ impl TypeAwareSession {
             ));
         }
         Ok(response.response)
-    }
-
-    fn restart(&mut self) -> Result<(), TypeAwareError> {
-        self.ensure_owner_open()?;
-        if let Some(mut process) = self.process.take() {
-            process.terminate();
-        }
-        self.process = Some(TypeAwareSessionProcess::spawn(&self.sidecar, &self.root)?);
-        self.ensure_owner_open()?;
-        Ok(())
     }
 
     fn ensure_owner_open(&self) -> Result<(), TypeAwareError> {

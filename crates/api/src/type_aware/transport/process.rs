@@ -1,13 +1,19 @@
-//! Bounded one-shot process IO shared with persistent sessions.
+//! One-shot process IO and stream reading shared with persistent sessions.
 
 use super::*;
+
+#[derive(Clone, Copy)]
+pub(super) enum SidecarIoPolicy {
+    Bounded,
+    Semantic,
+}
 
 pub(super) fn run_sidecar_json<Request, Response>(
     sidecar: &Path,
     root: &Path,
     request: &Request,
     timeout: Duration,
-    max_response_bytes: usize,
+    io_policy: SidecarIoPolicy,
 ) -> Result<Response, String>
 where
     Request: Serialize + ?Sized,
@@ -18,7 +24,7 @@ where
     }
     let mut request_bytes = serde_json::to_vec(request)
         .map_err(|err| format!("failed to serialize type-aware request: {err}"))?;
-    if request_bytes.len() > MAX_REQUEST_BYTES {
+    if matches!(io_policy, SidecarIoPolicy::Bounded) && request_bytes.len() > MAX_REQUEST_BYTES {
         return Err(format!(
             "type-aware request exceeded the {MAX_REQUEST_BYTES} byte limit"
         ));
@@ -50,16 +56,15 @@ where
 
     let writer = std::thread::spawn(move || write_request(stdin, &request_bytes));
     let stdout_terminator = terminator.clone();
+    let response_limit = match io_policy {
+        SidecarIoPolicy::Bounded => Some(MAX_RESPONSE_BYTES),
+        SidecarIoPolicy::Semantic => None,
+    };
     let stdout_reader = std::thread::spawn(move || {
-        read_bounded_stream(
-            stdout,
-            max_response_bytes,
-            "response",
-            Some(stdout_terminator),
-        )
+        read_stream(stdout, response_limit, "response", Some(stdout_terminator))
     });
     let stderr_reader = std::thread::spawn(move || {
-        read_bounded_stream(stderr, MAX_STDERR_BYTES, "stderr", Some(terminator))
+        read_stream(stderr, Some(MAX_STDERR_BYTES), "stderr", Some(terminator))
     });
 
     let status = child
@@ -182,18 +187,21 @@ fn write_request(mut stdin: std::process::ChildStdin, request: &[u8]) -> Result<
         .map_err(|err| format!("failed to write type-aware request: {err}"))
 }
 
-pub(super) fn read_bounded_stream(
-    reader: impl Read,
-    limit: usize,
+pub(super) fn read_stream(
+    mut reader: impl Read,
+    limit: Option<usize>,
     stream: &str,
     terminator: Option<fallow_process::ProcessTreeTerminator>,
 ) -> Result<Vec<u8>, String> {
-    let mut bytes = Vec::with_capacity(limit.min(16 * 1024));
-    reader
-        .take((limit + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|err| format!("failed to read type-aware sidecar {stream}: {err}"))?;
-    if bytes.len() > limit {
+    let mut bytes = Vec::new();
+    match limit {
+        Some(limit) => reader.take((limit + 1) as u64).read_to_end(&mut bytes),
+        None => reader.read_to_end(&mut bytes),
+    }
+    .map_err(|err| format!("failed to read type-aware sidecar {stream}: {err}"))?;
+    if let Some(limit) = limit
+        && bytes.len() > limit
+    {
         if let Some(terminator) = terminator {
             let _ = terminator.terminate();
         }

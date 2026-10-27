@@ -32,7 +32,7 @@ use discovery::{canonicalize_root, discover_type_aware_sidecar, non_empty_env};
 #[cfg(all(test, windows))]
 use process::sidecar_command_with_script;
 use process::{
-    SidecarTimeout, join_sidecar_worker, read_bounded_stream, run_sidecar_json, sidecar_command,
+    SidecarIoPolicy, SidecarTimeout, join_sidecar_worker, read_stream, run_sidecar_json, sidecar_command,
 };
 #[cfg(test)]
 use process::{bounded_text, sanitize_search_path};
@@ -46,7 +46,6 @@ const SIDECAR_TIMEOUT_ENV: &str = "FALLOW_TYPE_AWARE_TIMEOUT_SECS";
 const DEFAULT_SIDECAR_TIMEOUT_SECS: u64 = 120;
 const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
-const MAX_SEMANTIC_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_STDERR_BYTES: usize = MAX_STDERR_CHARS * 4;
 const MAX_STDERR_CHARS: usize = 4_096;
 static NEXT_ACTIVE_SIDECAR_ID: AtomicU64 = AtomicU64::new(1);
@@ -230,7 +229,7 @@ pub fn status(root: &Path) -> TypeAwareStatus {
         root,
         &request,
         sidecar_timeout(),
-        MAX_RESPONSE_BYTES,
+        SidecarIoPolicy::Bounded,
     ) {
         Ok(response)
             if response.protocol_version == TYPE_AWARE_PROTOCOL_VERSION
@@ -327,7 +326,7 @@ where
         &root,
         request,
         sidecar_timeout(),
-        MAX_SEMANTIC_RESPONSE_BYTES,
+        SidecarIoPolicy::Semantic,
     )
     .map_err(TypeAwareError)
 }
@@ -634,7 +633,7 @@ mod tests {
     #[test]
     fn oversized_response_is_rejected_during_read() {
         let response = std::io::Cursor::new(vec![b'x'; 65]);
-        let error = read_bounded_stream(response, 64, "response", None)
+        let error = read_stream(response, Some(64), "response", None)
             .expect_err("oversized response should fail");
 
         assert!(error.contains("exceeded the 64-byte limit"));
@@ -717,7 +716,7 @@ if (session) {
             root.path(),
             &request,
             sidecar_timeout(),
-            MAX_SEMANTIC_RESPONSE_BYTES,
+            SidecarIoPolicy::Semantic,
         )
         .expect("complete one-shot semantic envelope");
         assert_complete_large_envelope(&response, install.path());
@@ -733,7 +732,6 @@ if (session) {
         let process = TypeAwareSessionProcess::spawn(&sidecar, &root).expect("persistent sidecar");
         let mut session = TypeAwareSession {
             root: root.clone(),
-            sidecar,
             process: Some(process),
             request_id: 0,
             revision: 0,
@@ -778,7 +776,7 @@ if (session) {
             root.path(),
             &request,
             Duration::from_millis(100),
-            MAX_RESPONSE_BYTES,
+            SidecarIoPolicy::Bounded,
         )
         .expect_err("blocked sidecar should time out");
 
@@ -825,7 +823,7 @@ if (session) {
                     operation: "status",
                 },
                 Duration::from_secs(30),
-                MAX_RESPONSE_BYTES,
+                SidecarIoPolicy::Bounded,
             )
         });
 
@@ -917,7 +915,6 @@ for await (const line of lines) {
         let cancellation = Arc::new(AtomicBool::new(false));
         let mut session = TypeAwareSession {
             root: canonical_root.clone(),
-            sidecar: canonical_sidecar,
             process: Some(process),
             request_id: 0,
             revision: 0,
@@ -1027,7 +1024,6 @@ for await (const line of lines) {
             .expect("spawn persistent sidecar");
         let mut session = TypeAwareSession {
             root: canonical_root.clone(),
-            sidecar: canonical_sidecar,
             process: Some(process),
             request_id: 0,
             revision: 0,
@@ -1042,7 +1038,10 @@ for await (const line of lines) {
             )
             .expect_err("the first transport error must be returned without replay");
 
-        assert!(error.to_string().contains("response identity mismatch"), "{error}");
+        assert!(
+            error.to_string().contains("response identity mismatch"),
+            "{error}"
+        );
         let state: serde_json::Value = serde_json::from_slice(
             &fs::read(install.path().join(".session-restart-state.json")).expect("launch record"),
         )
@@ -1113,7 +1112,6 @@ for await (const line of lines) {
         let cancellation_marker = sidecar_dir.join(".session-cancelled");
         let mut session = TypeAwareSession {
             root: canonical_root.clone(),
-            sidecar: canonical_sidecar,
             process: Some(process),
             request_id: 0,
             revision: 0,
