@@ -22933,6 +22933,17 @@
     "TypeAwareMeta": {
       "type": "object",
       "properties": {
+        "reference_scope": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SemanticReferenceCoverage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Attested execution coverage of the native reference domain."
+        },
         "identity": {
           "anyOf": [
             {
@@ -34188,6 +34199,40 @@
         "reason"
       ],
       "description": "One file of the mutation report that does not match the current source."
+    },
+    "SemanticReferenceCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fingerprint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Exact native scope digest; absent only for compiler-domain inspections."
+        },
+        "source_count": {
+          "type": "integer",
+          "description": "Number of eligible native source identities with compiler ownership."
+        },
+        "candidate_count": {
+          "type": "integer",
+          "description": "Number of symbol candidates resolved in this batch."
+        },
+        "owning_projects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Complete configured/inferred projects owning the analyzed sources/candidates."
+        }
+      },
+      "required": [
+        "source_count",
+        "candidate_count",
+        "owning_projects"
+      ],
+      "description": "Executed compiler coverage of the requested native reference domain."
     }
   }
 }

@@ -28,6 +28,7 @@ const BATCH_REQUEST_KEYS = new Set([
   "projects",
   "queries",
   "evidence_limit",
+  "reference_scope",
 ]);
 const SYMBOL_QUERY_KEYS = new Set(["id", "operation", "symbol"]);
 const SYMBOL_USE_QUERY_KEYS = new Set(["id", "operation", "symbol", "framework_contracts"]);
@@ -379,6 +380,54 @@ const parseEvidenceLimit = (value) => {
   return limit;
 };
 
+const parseReferenceScope = (value, root) => {
+  requireObject(value, "reference_scope");
+  if (value.kind === "compiler-program") {
+    requireExactKeys(value, new Set(["kind"]), "reference_scope");
+    return { kind: "compiler-program" };
+  }
+  requireLiteral(value.kind, "graph", "reference_scope.kind");
+  requireExactKeys(
+    value,
+    new Set(["kind", "mode", "sources", "roots", "fingerprint"]),
+    "reference_scope",
+  );
+  if (!["production", "all"].includes(value.mode)) {
+    throw new Error("reference_scope.mode must be production or all");
+  }
+  const identity = (file, field) => {
+    const parsed = parseCandidatePath(file, field, root);
+    const canonical = path
+      .relative(root, canonicalFileIdentity(parsed.absolutePath))
+      .split(path.sep)
+      .join("/");
+    if (file !== canonical || canonical.startsWith("../")) {
+      throw new Error(`${field} must be a canonical source identity within root`);
+    }
+    return canonical;
+  };
+  if (!Array.isArray(value.sources) || !Array.isArray(value.roots)) {
+    throw new Error("reference_scope.sources and roots must be arrays");
+  }
+  const sources = value.sources.map((file, index) =>
+    identity(file, `reference_scope.sources[${index}]`),
+  );
+  if (new Set(sources).size !== sources.length)
+    throw new Error("reference_scope.sources must be unique");
+  const roots = value.roots.map((entry, index) => {
+    const field = `reference_scope.roots[${index}]`;
+    requireObject(entry, field);
+    requireExactKeys(entry, new Set(["path", "role"]), field);
+    if (!["runtime", "test"].includes(entry.role))
+      throw new Error(`${field}.role must be runtime or test`);
+    return { path: identity(entry.path, `${field}.path`), role: entry.role };
+  });
+  if (typeof value.fingerprint !== "string" || !/^[0-9a-f]{64}$/u.test(value.fingerprint)) {
+    throw new Error("reference_scope.fingerprint must be a SHA-256 digest");
+  }
+  return { kind: "graph", mode: value.mode, sources, roots, fingerprint: value.fingerprint };
+};
+
 const parseBatchRequest = (value) => {
   requireObject(value, "request");
   requireExactKeys(value, BATCH_REQUEST_KEYS, "request");
@@ -392,7 +441,13 @@ const parseBatchRequest = (value) => {
   validateGraphQueryCount(queries);
   requireUniqueCandidateIds(queries);
   const evidenceLimit = parseEvidenceLimit(value.evidence_limit);
-  return { root, projects, queries, evidenceLimit };
+  return {
+    root,
+    projects,
+    queries,
+    evidenceLimit,
+    referenceScope: parseReferenceScope(value.reference_scope, root),
+  };
 };
 
 const MUTANT_TYPECHECK_REQUEST_KEYS = new Set(["protocol_version", "operation", "root", "files"]);
@@ -473,6 +528,7 @@ export const parseRequest = (value) => {
 export const createSemanticResponse = ({
   backendIdentity,
   selectedTsconfigs,
+  referenceScopeCoverage,
   projectResults,
   results,
   phaseTimings,
@@ -484,6 +540,7 @@ export const createSemanticResponse = ({
   sidecar_version: SIDECAR_VERSION,
   backend: backendIdentity.family,
   backend_version: backendIdentity.version,
+  reference_scope: referenceScopeCoverage,
   selected_tsconfigs: [...selectedTsconfigs].toSorted(compareText),
   projects: [...projectResults].toSorted((left, right) => compareText(left.config, right.config)),
   results: [...results]

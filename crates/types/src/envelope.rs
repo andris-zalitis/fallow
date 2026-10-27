@@ -368,6 +368,9 @@ pub struct Meta {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TypeAwareMeta {
+    /// Attested execution coverage of the native reference domain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_scope: Option<crate::semantic::SemanticReferenceCoverage>,
     /// Compatibility identity used by audit, baselines, snapshots, and stores.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<SemanticAnalysisIdentity>,

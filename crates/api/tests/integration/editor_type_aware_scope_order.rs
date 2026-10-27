@@ -1,8 +1,6 @@
-//! The editor narrows dead-code findings to the changed files after the
-//! type-aware pass. That pass reads `unused_files` as its set of unreachable
-//! files. A scope before the pass removes an unused file outside the changed
-//! files from that set, and a reference in that file then credits a real
-//! finding in a changed file.
+//! The editor narrows findings after semantic reconciliation. Runtime evidence
+//! comes from the retained native graph scope, so an unreachable caller outside
+//! the changed files cannot credit a candidate in a changed file.
 
 #![expect(
     clippy::unwrap_used,
@@ -118,9 +116,11 @@ fn changed_files_scope_after_type_aware_pass_keeps_real_finding() {
         .expect("the type-aware pass records a decision for `helper`");
     assert_eq!(
         decision.decision,
-        SemanticCandidateDecisionKind::RetainedAbstained,
-        "the only evidence for `helper` comes from an unreachable file: {decision:?}"
+        SemanticCandidateDecisionKind::ConfirmedNoStaticReferences,
+        "an unreachable caller cannot enter the reference scan: {decision:?}"
     );
+    assert!(decision.evidence.is_empty());
+    assert_eq!(decision.total_evidence_count, 0);
     let unused_files: Vec<String> = results
         .unused_files
         .iter()

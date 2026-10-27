@@ -62,6 +62,144 @@ fn analyze_project_root_for_test(
     unmatched_config_patterns
 }
 
+fn rerun_type_aware_project_test(test_name: &str, missing_companion: bool) -> bool {
+    if std::env::var("FALLOW_LSP_TYPE_AWARE_PROJECT_TEST").as_deref() == Ok(test_name) {
+        return false;
+    }
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    command
+        .args(["--exact", test_name, "--nocapture"])
+        .env("FALLOW_LSP_TYPE_AWARE_PROJECT_TEST", test_name);
+    let directory = tempfile::tempdir().expect("companion directory");
+    if missing_companion {
+        command.env(
+            "FALLOW_TYPE_AWARE_BIN",
+            directory.path().join("missing-companion"),
+        );
+    } else if std::env::var_os("FALLOW_TYPE_AWARE_BIN").is_none() {
+        command.env(
+            "FALLOW_TYPE_AWARE_BIN",
+            PathBuf::from(
+                std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"),
+            )
+            .join("../../tools/type-aware-sidecar/fallow-type-aware.mjs"),
+        );
+    }
+    let output = command.output().expect("isolated semantic project test");
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    true
+}
+
+fn type_aware_project_for_test() -> (
+    std::result::Result<(), analysis::ProjectAnalysisError>,
+    EditorAnalysisOutput,
+    usize,
+) {
+    let directory = tempfile::tempdir().expect("project directory");
+    let root = directory.path();
+    std::fs::create_dir_all(root.join("src")).expect("source directory");
+    for (name, contents) in [
+        (
+            "package.json",
+            r#"{"name":"semantic-project","private":true,"main":"src/index.ts"}"#,
+        ),
+        (
+            "tsconfig.json",
+            r#"{"compilerOptions":{"strict":true},"include":["src"]}"#,
+        ),
+        (
+            "src/index.ts",
+            "import { used } from './library';\nconsole.log(used);\n",
+        ),
+        (
+            "src/library.ts",
+            "export const used = 1;\n/** Review this declaration before editing. */\nexport function unused() { return 2; }\n",
+        ),
+    ] {
+        std::fs::write(root.join(name), contents).expect("project input");
+    }
+    let options = LspTypeAwareOptions {
+        enabled: true,
+        ..LspTypeAwareOptions::default()
+    };
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let type_aware_sessions = Arc::new(StdMutex::new(FxHashMap::default()));
+    let mut merged_analysis =
+        EditorAnalysisOutput::new(AnalysisResults::default(), DuplicationReport::default());
+    let result = analyze_project_root(&mut ProjectRootAnalysisInput {
+        project_root: root,
+        config_path: None,
+        allow_remote_extends: false,
+        duplication_options: None,
+        production_override: None,
+        inline_complexity_enabled: false,
+        type_aware_options: Some(&options),
+        type_aware_sessions: &type_aware_sessions,
+        type_aware_changes: &fallow_api::TypeAwareFileChanges::default(),
+        cancellation: &cancellation,
+        run_cancellation: &cancellation,
+        changed_files: None,
+        global_changed_since_requested: false,
+        no_package_baselines: false,
+        sessions: &Arc::default(),
+        parse_work: &mut analysis::RunParseWork::default(),
+        merged_analysis: &mut merged_analysis,
+        merged_inline_complexity: &mut Vec::new(),
+        config_messages: &mut Vec::new(),
+        package_scopes: &mut Vec::new(),
+        unmatched_config_patterns: &mut Vec::new(),
+    });
+    let kept_sessions = type_aware_sessions.lock().expect("session registry").len();
+    (result, merged_analysis, kept_sessions)
+}
+
+#[test]
+fn failed_type_aware_project_does_not_merge_syntactic_output() {
+    if rerun_type_aware_project_test(
+        "tests::failed_type_aware_project_does_not_merge_syntactic_output",
+        true,
+    ) {
+        return;
+    }
+    let (result, output, kept_sessions) = type_aware_project_for_test();
+    let error = result.expect_err("requested semantic analysis must fail");
+    assert!(!error.is_cancelled());
+    assert!(error.to_string().contains("missing-companion"));
+    assert!(output.results.unused_exports.is_empty());
+    assert!(output.results.unused_files.is_empty());
+    assert_eq!(kept_sessions, 0);
+}
+
+#[test]
+fn successful_type_aware_project_merges_edit_safety_partial_outcome() {
+    if rerun_type_aware_project_test(
+        "tests::successful_type_aware_project_merges_edit_safety_partial_outcome",
+        false,
+    ) {
+        return;
+    }
+    let (result, output, kept_sessions) = type_aware_project_for_test();
+    result.expect("requested semantic analysis succeeds");
+    let finding = output
+        .results
+        .unused_exports
+        .iter()
+        .find(|finding| finding.export.export_name == "unused")
+        .expect("documented unused export remains a finding");
+    let decision = finding.semantic.as_ref().expect("semantic decision");
+    assert_eq!(
+        decision.reason_code,
+        Some(fallow_types::semantic::SemanticGapReason::AttachedComment)
+    );
+    assert!(!decision.closed_world_eligible);
+    assert_eq!(kept_sessions, 1);
+}
+
 #[test]
 fn server_capabilities_advertise_pull_diagnostics() {
     let caps = build_server_capabilities(true);

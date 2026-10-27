@@ -30,7 +30,7 @@ export const assertTypescriptBackendResolvable = (
   if (version !== BACKEND.client_version) {
     throw new Error(
       `resolved typescript ${version} from ${path.dirname(manifest)}; ` +
-      `fallow-type-aware needs client ${BACKEND.client_version}; ${INSTALL_HINT}`,
+        `fallow-type-aware needs client ${BACKEND.client_version}; ${INSTALL_HINT}`,
     );
   }
   if (!manifestPath) {
@@ -54,4 +54,4 @@ export const assertTypescriptBackendResolvable = (
 let selectedBackend;
 
 /** A process/session consumes one immutable payload, including its verified identity. */
-export const getSelectedBackend = () => selectedBackend ??= assertTypescriptBackendResolvable();
+export const getSelectedBackend = () => (selectedBackend ??= assertTypescriptBackendResolvable());

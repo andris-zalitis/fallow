@@ -2576,6 +2576,7 @@ mod tests {
 
     fn empty_analysis_output() -> fallow_engine::dead_code::DeadCodeAnalysisArtifacts {
         fallow_engine::dead_code::DeadCodeAnalysisArtifacts {
+            reference_scope: None,
             results: fallow_types::results::AnalysisResults::default(),
             timings: None,
             graph: None,

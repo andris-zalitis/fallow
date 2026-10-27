@@ -4395,6 +4395,7 @@ mod tests {
         let file_paths = rustc_hash::FxHashMap::default();
 
         let output = crate::results::DeadCodeAnalysisArtifacts {
+            reference_scope: None,
             results: fallow_types::results::AnalysisResults::default(),
             timings: None,
             graph: Some(crate::module_graph::RetainedModuleGraph::from(graph)),
@@ -4428,6 +4429,7 @@ mod tests {
         let file_paths = rustc_hash::FxHashMap::default();
 
         let output = crate::results::DeadCodeAnalysisArtifacts {
+            reference_scope: None,
             results: fallow_types::results::AnalysisResults::default(),
             timings: None,
             graph: None,
@@ -4510,6 +4512,7 @@ mod tests {
         file_paths.insert(crate::discover::FileId(0), &files[0].path);
 
         let output = crate::results::DeadCodeAnalysisArtifacts {
+            reference_scope: None,
             results: fallow_types::results::AnalysisResults::default(),
             timings: None,
             graph: Some(crate::module_graph::RetainedModuleGraph::from(graph)),
@@ -4566,6 +4569,7 @@ mod tests {
         file_paths.insert(crate::discover::FileId(0), &files[0].path);
 
         let output = crate::results::DeadCodeAnalysisArtifacts {
+            reference_scope: None,
             results: fallow_types::results::AnalysisResults::default(),
             timings: None,
             graph: Some(crate::module_graph::RetainedModuleGraph::from(graph)),
@@ -4673,6 +4677,7 @@ mod tests {
         changed.insert(path_b);
 
         let output = crate::results::DeadCodeAnalysisArtifacts {
+            reference_scope: None,
             results: fallow_types::results::AnalysisResults::default(),
             timings: None,
             graph: Some(crate::module_graph::RetainedModuleGraph::from(graph)),
@@ -4777,6 +4782,7 @@ mod tests {
         file_paths.insert(crate::discover::FileId(1), &files[1].path);
 
         let output = crate::results::DeadCodeAnalysisArtifacts {
+            reference_scope: None,
             results: fallow_types::results::AnalysisResults::default(),
             timings: None,
             graph: Some(crate::module_graph::RetainedModuleGraph::from(graph)),
@@ -4867,6 +4873,7 @@ mod tests {
         );
 
         let output = crate::results::DeadCodeAnalysisArtifacts {
+            reference_scope: None,
             results,
             timings: None,
             graph: Some(crate::module_graph::RetainedModuleGraph::from(graph)),
@@ -4991,6 +4998,7 @@ mod tests {
         file_paths.insert(crate::discover::FileId(0), &files[0].path);
 
         let output = crate::results::DeadCodeAnalysisArtifacts {
+            reference_scope: None,
             results: fallow_types::results::AnalysisResults::default(),
             timings: None,
             graph: Some(crate::module_graph::RetainedModuleGraph::from(graph)),
@@ -5120,6 +5128,7 @@ mod tests {
         );
 
         let output = crate::results::DeadCodeAnalysisArtifacts {
+            reference_scope: None,
             results,
             timings: None,
             graph: Some(crate::module_graph::RetainedModuleGraph::from(graph)),
@@ -5298,6 +5307,7 @@ mod tests {
         );
 
         let output = crate::results::DeadCodeAnalysisArtifacts {
+            reference_scope: None,
             results,
             timings: None,
             graph: Some(crate::module_graph::RetainedModuleGraph::from(graph)),
@@ -5461,6 +5471,7 @@ mod tests {
         }
 
         let output = crate::results::DeadCodeAnalysisArtifacts {
+            reference_scope: None,
             results,
             timings: None,
             graph: Some(crate::module_graph::RetainedModuleGraph::from(graph)),
@@ -5526,6 +5537,7 @@ mod tests {
             rustc_hash::FxHashMap::default();
 
         let output = crate::results::DeadCodeAnalysisArtifacts {
+            reference_scope: None,
             results: fallow_types::results::AnalysisResults::default(),
             timings: None,
             graph: Some(crate::module_graph::RetainedModuleGraph::from(graph)),
@@ -5591,6 +5603,7 @@ mod tests {
         file_paths.insert(crate::discover::FileId(0), &files[0].path);
 
         let output = crate::results::DeadCodeAnalysisArtifacts {
+            reference_scope: None,
             results: fallow_types::results::AnalysisResults::default(),
             timings: None,
             graph: Some(crate::module_graph::RetainedModuleGraph::from(graph)),
@@ -5700,6 +5713,7 @@ mod tests {
         file_paths.insert(crate::discover::FileId(0), &files[0].path);
 
         let output = crate::results::DeadCodeAnalysisArtifacts {
+            reference_scope: None,
             results: fallow_types::results::AnalysisResults::default(),
             timings: None,
             graph: Some(crate::module_graph::RetainedModuleGraph::from(graph)),
@@ -5765,6 +5779,7 @@ mod tests {
         file_paths.insert(crate::discover::FileId(0), &files[0].path);
 
         let output = crate::results::DeadCodeAnalysisArtifacts {
+            reference_scope: None,
             results: fallow_types::results::AnalysisResults::default(),
             timings: None,
             graph: Some(crate::module_graph::RetainedModuleGraph::from(graph)),
@@ -5994,6 +6009,7 @@ mod tests {
             rustc_hash::FxHashMap::default();
         file_paths.insert(crate::discover::FileId(0), &files[0].path);
         let output = crate::results::DeadCodeAnalysisArtifacts {
+            reference_scope: None,
             results: fallow_types::results::AnalysisResults::default(),
             timings: None,
             graph: Some(crate::module_graph::RetainedModuleGraph::from(graph)),
@@ -6062,6 +6078,7 @@ mod tests {
             rustc_hash::FxHashMap::default();
         file_paths.insert(crate::discover::FileId(0), &files[0].path);
         let output = crate::results::DeadCodeAnalysisArtifacts {
+            reference_scope: None,
             results: fallow_types::results::AnalysisResults::default(),
             timings: None,
             graph: Some(crate::module_graph::RetainedModuleGraph::from(graph)),

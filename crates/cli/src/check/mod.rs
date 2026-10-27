@@ -669,6 +669,7 @@ pub struct CheckResult {
 }
 
 struct CheckAnalysisData {
+    reference_scope: Option<fallow_types::semantic::ReferenceScope>,
     results: AnalysisResults,
     trace_graph: Option<fallow_engine::module_graph::RetainedModuleGraph>,
     trace_timings: Option<fallow_types::trace::PipelineTimings>,
@@ -687,6 +688,7 @@ fn check_data_from_artifacts(
 ) -> CheckAnalysisData {
     crate::requests::measure_changed_since_scope(session.files());
     CheckAnalysisData {
+        reference_scope: output.reference_scope,
         results: output.results,
         trace_graph: output.graph,
         trace_timings: output.timings,
@@ -706,6 +708,7 @@ fn check_data_from_plain_artifacts(
 ) -> CheckAnalysisData {
     crate::requests::measure_changed_since_scope(session.files());
     CheckAnalysisData {
+        reference_scope: output.reference_scope,
         results: output.results,
         trace_graph: None,
         trace_timings: None,
@@ -1168,6 +1171,7 @@ fn complete_check_execution(input: CheckCompletionInput<'_>) -> CheckResult {
         .as_ref()
         .map(|loaded| (loaded.staleness.entries, loaded.staleness.matched));
     let CheckAnalysisData {
+        reference_scope: _,
         results,
         trace_graph,
         trace_timings,
@@ -1198,12 +1202,10 @@ fn complete_check_execution(input: CheckCompletionInput<'_>) -> CheckResult {
         });
     }
 
-    let retained_files_for_cross_reference = if opts.include_dupes && retained_modules.is_some() {
-        retained_files.clone()
-    } else if opts.include_dupes {
-        retained_files.take()
-    } else {
-        None
+    let retained_files_for_cross_reference = match (opts.include_dupes, &retained_modules) {
+        (true, Some(_)) => retained_files.clone(),
+        (true, None) => retained_files.take(),
+        (false, _) => None,
     };
 
     let shared_parse = build_shared_parse_data(
@@ -1307,7 +1309,6 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
         }
         return Err(code);
     }
-    let unfiltered_unused_files = data.results.unused_files.clone();
     let mut finding_id_trace = opts.finding_ids.map(|filter| {
         fallow_engine::dead_code::FindingIdTrace::start(filter.clone(), &mut data.results)
     });
@@ -1372,10 +1373,9 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
                 &data.workspaces,
             )
         });
-        let reported_unused_files =
-            std::mem::replace(&mut data.results.unused_files, unfiltered_unused_files);
         let outcome = fallow_api::refine_type_aware_results_with_config(
             &config,
+            data.reference_scope.as_ref(),
             &mut data.results,
             &type_aware_projects,
             &entry_points,
@@ -1383,34 +1383,16 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
             config.rules.private_type_leaks != Severity::Off,
             opts.retain_modules_for_health,
         );
-        data.results.unused_files = reported_unused_files;
         match outcome {
             Ok(outcome) => outcome.map_or((None, None), |outcome| {
                 (Some(outcome.type_aware), outcome.type_coupling)
             }),
             Err(error) => {
-                let meta = crate::type_aware_degrade::degrade_or_fail(
-                    &crate::type_aware_degrade::DegradeContext {
-                        root: &config.root,
-                        error: &error.to_string(),
-                        failure_label: "Type-aware analysis failed",
-                        require: config.type_aware.require,
-                        quiet: opts.quiet,
-                        output: opts.output,
-                    },
-                )?;
-                // `degrade_or_fail` already put this on stderr, honoring
-                // `--quiet`. Copying it into the outcome would print the same
-                // sentence a second time from `print_type_aware_warnings`,
-                // which has no quiet or format guard. The warning still travels
-                // in `meta` for `_meta.type_aware.warnings`.
-                (
-                    Some(fallow_api::TypeAwareOutcome {
-                        meta,
-                        warnings: Vec::new(),
-                    }),
-                    None,
-                )
+                return Err(crate::error::emit_error(
+                    &format!("Type-aware analysis failed: {error}"),
+                    2,
+                    opts.output,
+                ));
             }
         }
     } else {

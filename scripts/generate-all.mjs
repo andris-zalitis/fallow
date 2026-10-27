@@ -213,7 +213,7 @@ export const TYPE_AWARE_PROTOCOL = Object.freeze({\n\
   mutant_typecheck_operation: ${string(manifest.mutant_typecheck_operation)},\n\
   query_operations: [${stringArray(manifest.query_operations)}],\n\
   session_envelope_types: [${stringArray(manifest.session_envelope_types)}],\n\
-  backend: ${JSON.stringify(manifest.backend)},\n\
+  backend: ${jsLiteral(manifest.backend, 2, "  backend: ")},\n\
   sidecar: {\n\
     package: ${string(manifest.sidecar.package)},\n\
     version_source: ${string(manifest.sidecar.version_source)},\n\

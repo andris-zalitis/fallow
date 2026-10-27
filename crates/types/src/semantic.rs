@@ -10,6 +10,69 @@ use serde::{Deserialize, Serialize};
 
 use crate::serde_path;
 
+/// Native graph projection defining which files may supply runtime references.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum ReferenceScope {
+    /// General inspection operations use the compiler's project domain.
+    CompilerProgram,
+    /// Dead-code operations use the active native graph, never tsconfig membership.
+    Graph {
+        /// Active graph mode.
+        mode: ReferenceScopeMode,
+        /// Canonical repository-relative eligible source identities.
+        sources: Vec<String>,
+        /// Native entry-point roles, before finding presentation filters.
+        roots: Vec<ReferenceRoot>,
+        /// Digest of the active graph/config projection.
+        fingerprint: String,
+    },
+}
+
+/// Native reachability domain used by a dead-code analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReferenceScopeMode {
+    /// Only runtime-reachable production sources can credit a use.
+    Production,
+    /// All reachable sources in the active graph can credit a use.
+    All,
+}
+
+/// The native graph's classification of an entry point.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct ReferenceRoot {
+    /// Canonical repository-relative source identity.
+    pub path: String,
+    /// Runtime or test entry role assigned by the native graph.
+    pub role: ReferenceRootRole,
+}
+
+/// Native entry-point role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReferenceRootRole {
+    /// Runtime/application entry.
+    Runtime,
+    /// Test entry.
+    Test,
+}
+
+/// Executed compiler coverage of the requested native reference domain.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SemanticReferenceCoverage {
+    /// Exact native scope digest; absent only for compiler-domain inspections.
+    pub fingerprint: Option<String>,
+    /// Number of eligible native source identities with compiler ownership.
+    pub source_count: usize,
+    /// Number of symbol candidates resolved in this batch.
+    pub candidate_count: usize,
+    /// Complete configured/inferred projects owning the analyzed sources/candidates.
+    pub owning_projects: Vec<String>,
+}
+
 /// Semantic capabilities that can share one TypeScript Program session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

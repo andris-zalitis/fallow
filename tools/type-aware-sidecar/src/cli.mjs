@@ -161,7 +161,11 @@ export const run = async ({ input, output, args = [], backendIdentity = getSelec
     const results = checkMutants(request);
     writeJson(
       output,
-      createMutantTypecheckResponse({ backendIdentity, results, elapsedMs: performance.now() - startedAt }),
+      createMutantTypecheckResponse({
+        backendIdentity,
+        results,
+        elapsedMs: performance.now() - startedAt,
+      }),
     );
     return;
   }

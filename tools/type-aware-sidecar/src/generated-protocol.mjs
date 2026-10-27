@@ -1,14 +1,29 @@
 // Generated from crates/api/type-aware-protocol.json. Do not edit.
 export const TYPE_AWARE_PROTOCOL = Object.freeze({
   schema_version: 1,
-  wire_protocol_version: 7,
-  semantic_schema_version: 3,
+  wire_protocol_version: 8,
+  semantic_schema_version: 4,
   analysis_operation: "semantic-queries",
   status_operation: "status",
   mutant_typecheck_operation: "mutant-typecheck",
   query_operations: ["symbol-use", "symbol-trace", "api-surface", "symbol-impact", "type-coupling"],
   session_envelope_types: ["analyze", "shutdown"],
-  backend: {"family":"typescript-go","version":"7.0.2-upstroke.1","client_version":"7.0.2","source":{"repository":"https://github.com/microsoft/typescript-go.git","base_revision":"2bd066d87f5bafd315be9f40889d0a60b9e58e0b","delta_path":"scripts/fork/typescript-go.patch","tree":"dcdcf4feddbd70de7c2109e33324124010eec7ea"},"build":{"go_version":"go1.26.0","library_mode":"embedded"},"trust_root":"fork-trust-root.pem"},
+  backend: {
+    family: "typescript-go",
+    version: "7.0.2-upstroke.1",
+    client_version: "7.0.2",
+    source: {
+      repository: "https://github.com/microsoft/typescript-go.git",
+      base_revision: "2bd066d87f5bafd315be9f40889d0a60b9e58e0b",
+      delta_path: "scripts/fork/typescript-go.patch",
+      tree: "dcdcf4feddbd70de7c2109e33324124010eec7ea",
+    },
+    build: {
+      go_version: "go1.26.0",
+      library_mode: "embedded",
+    },
+    trust_root: "fork-trust-root.pem",
+  },
   sidecar: {
     package: "fallow-type-aware",
     version_source: "workspace-package",

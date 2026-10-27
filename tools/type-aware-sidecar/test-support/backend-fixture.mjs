@@ -15,9 +15,11 @@ export const backendFixture = (t) => {
   writeFileSync(path.join(root, "NOTICE.txt"), "fixture notice");
   const manifestPath = path.join(root, "backend.json");
   const manifest = {
-    schema_version: 1, backend: structuredClone(TYPE_AWARE_PROTOCOL.backend),
+    schema_version: 1,
+    backend: structuredClone(TYPE_AWARE_PROTOCOL.backend),
     target: `${process.platform}-${process.arch}`,
-    executable: { path: "tsgo", sha256: artifactDigest(bytes) }, notices: [{ path: "NOTICE.txt", sha256: artifactDigest(Buffer.from("fixture notice")) }],
+    executable: { path: "tsgo", sha256: artifactDigest(bytes) },
+    notices: [{ path: "NOTICE.txt", sha256: artifactDigest(Buffer.from("fixture notice")) }],
     provenance: { go_version: TYPE_AWARE_PROTOCOL.backend.build.go_version },
   };
   const save = () => {

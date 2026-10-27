@@ -4,10 +4,9 @@
     reason = "tests and benches use unwrap and expect to keep fixture setup concise"
 )]
 
-//! A type-aware pass that cannot run must not fail the whole command under the
-//! default `best-effort` policy. Syntactic analysis reports a superset of the
-//! refined findings, so continuing is the conservative outcome. Only
-//! `--type-aware-require complete` still exits 2.
+//! Requested semantic dead-code analysis fails when the companion cannot run.
+//! Best-effort still permits successful partial evidence; health coupling has
+//! its own degradation contract.
 
 use crate::common::{CommandOutput, fixture_path, parse_json, run_fallow_raw_with_env};
 
@@ -27,7 +26,7 @@ fn run_with_missing_companion(args: &[&str]) -> CommandOutput {
 }
 
 #[test]
-fn check_degrades_to_syntactic_findings_under_best_effort() {
+fn check_fails_requested_semantic_analysis_under_best_effort() {
     let output = run_with_missing_companion(&[
         "dead-code",
         "--type-aware",
@@ -37,24 +36,18 @@ fn check_degrades_to_syntactic_findings_under_best_effort() {
         "--quiet",
     ]);
 
-    assert_ne!(output.code, 2, "stderr: {}", output.stderr);
+    assert_eq!(output.code, 2, "stderr: {}", output.stderr);
     let json = parse_json(&output);
-    let warnings = json["_meta"]["type_aware"]["warnings"]
-        .as_array()
-        .expect("degraded run records the reason in _meta.type_aware.warnings");
-    assert_eq!(json["_meta"]["type_aware"]["warning_count"], 1);
-    assert_eq!(json["_meta"]["type_aware"]["executed"], false);
+    assert_eq!(json["error"], true);
+    assert_eq!(json["exit_code"], 2);
     assert!(
-        warnings[0].as_str().unwrap().contains(DEGRADED_NOTICE),
-        "warnings: {warnings:?}"
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("Type-aware analysis failed")
     );
-    assert!(
-        json["unused_exports"]
-            .as_array()
-            .is_some_and(|v| !v.is_empty()),
-        "syntactic findings should survive: {}",
-        output.stdout
-    );
+    assert!(json.get("unused_exports").is_none());
+    assert!(json.get("_meta").is_none());
 }
 
 #[test]
@@ -78,22 +71,21 @@ fn check_still_fails_closed_under_require_complete() {
     );
 }
 
-/// The notice is the user's only signal that the report is unrefined, so it has
-/// to arrive once. `check` used to print it twice: once from the shared degrade
-/// policy and once more from the per-warning printer that copied it out of the
-/// metadata.
+/// A failed requested pass emits one error and no successful refinement report.
 #[test]
-fn human_check_states_the_degradation_once_and_claims_no_success() {
+fn human_check_states_the_semantic_failure_once_and_claims_no_success() {
     let output = run_with_missing_companion(&["dead-code", "--type-aware", "--unused-exports"]);
     let emitted = format!("{}{}", output.stdout, output.stderr);
 
     assert_eq!(
-        emitted.matches(DEGRADED_NOTICE).count(),
+        emitted.matches("Type-aware analysis failed").count(),
         1,
         "stdout: {}\nstderr: {}",
         output.stdout,
         output.stderr
     );
+    assert_eq!(output.code, 2);
+    assert!(!emitted.contains(DEGRADED_NOTICE));
     assert!(
         !emitted.contains("Type-aware refinement:"),
         "a pass that never ran must not report counts: {emitted}"
@@ -114,11 +106,9 @@ fn human_health_coupling_states_the_degradation_once() {
     );
 }
 
-/// `--quiet` has to silence the notice on every stream while the machine-facing
-/// copy in `_meta` survives, so a JSON consumer still learns the report is
-/// unrefined.
+/// Quiet JSON keeps the structured failure on stdout and stderr empty.
 #[test]
-fn quiet_json_keeps_the_degradation_out_of_stderr() {
+fn quiet_json_keeps_the_semantic_failure_structured_on_stdout() {
     let output = run_with_missing_companion(&[
         "dead-code",
         "--type-aware",
@@ -128,26 +118,21 @@ fn quiet_json_keeps_the_degradation_out_of_stderr() {
         "--quiet",
     ]);
 
-    assert!(
-        !output.stderr.contains(DEGRADED_NOTICE),
-        "stderr: {}",
-        output.stderr
-    );
+    assert_eq!(output.code, 2);
+    assert!(output.stderr.is_empty(), "stderr: {}", output.stderr);
     let json = parse_json(&output);
+    assert_eq!(json["error"], true);
+    assert_eq!(json["exit_code"], 2);
     assert!(
-        json["_meta"]["type_aware"]["warnings"][0]
+        json["message"]
             .as_str()
-            .is_some_and(|warning| warning.contains(DEGRADED_NOTICE)),
-        "stdout: {}",
-        output.stdout
+            .unwrap()
+            .contains("Type-aware analysis failed")
     );
+    assert!(json.get("_meta").is_none());
 }
 
-/// `fix` is the one command that does not degrade. The reporting commands can
-/// fall back to the syntactic set because it is a superset, so a gate only gets
-/// stricter. Applying that same superset from a command that removes code would
-/// delete the entries a working type-aware pass would have proven live, which is
-/// the opposite of conservative.
+/// Fix also requires the requested semantic evidence before proposing deletions.
 #[test]
 fn fix_dry_run_fails_closed_even_under_best_effort() {
     let output = run_with_missing_companion(&[
@@ -165,8 +150,7 @@ fn fix_dry_run_fails_closed_even_under_best_effort() {
         "stdout: {}",
         output.stdout
     );
-    // `fix` is the only surface that can still stop, so it is the only place a
-    // user can get stuck, and the error has to name both ways out.
+    // The failure explains the timeout setting and the explicit opt-out.
     assert!(
         output.stdout.contains("FALLOW_TYPE_AWARE_TIMEOUT_SECS"),
         "stdout: {}",

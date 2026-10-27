@@ -5,6 +5,7 @@
     reason = "engine graph helpers use FxHashSet changed-file sets consistently with the rest of fallow"
 )]
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use fallow_output::TestAdjacency;
@@ -51,6 +52,103 @@ impl RetainedModuleGraph {
         StaticTestCoverage::new(&self.inner)
     }
 
+    /// Project the active native reference domain before any finding filters.
+    pub fn reference_scope(
+        &self,
+        config: &fallow_config::ResolvedConfig,
+    ) -> crate::EngineResult<fallow_types::semantic::ReferenceScope> {
+        use fallow_types::semantic::{
+            ReferenceRoot, ReferenceRootRole, ReferenceScope, ReferenceScopeMode,
+        };
+        use sha2::{Digest, Sha256};
+        let root = dunce::canonicalize(&config.root).map_err(|error| {
+            crate::engine_error(format!(
+                "cannot resolve native reference root {}: {error}",
+                config.root.display()
+            ))
+        })?;
+        let mut identities = FxHashMap::<String, Vec<_>>::default();
+        for node in &self.inner.modules {
+            identities
+                .entry(reference_source_identity(&root, &node.path)?)
+                .or_default()
+                .push(node);
+        }
+        let mut nodes: Vec<_> = identities.into_iter().collect();
+        nodes.sort_by(|(left, _), (right, _)| left.cmp(right));
+        let sources: Vec<_> = nodes
+            .iter()
+            .filter(|(_, aliases)| {
+                aliases.iter().any(|node| {
+                    oxc_span::SourceType::from_path(&node.path).is_ok()
+                        && !fallow_graph::graph::is_declaration_file_path(&node.path)
+                        && if config.production {
+                            node.is_runtime_reachable()
+                        } else {
+                            node.is_reachable()
+                        }
+                })
+            })
+            .map(|(path, _)| path.clone())
+            .collect();
+        let roots = nodes
+            .iter()
+            .flat_map(|(path, aliases)| {
+                [
+                    (ReferenceRootRole::Runtime, &self.inner.runtime_entry_points),
+                    (ReferenceRootRole::Test, &self.inner.test_entry_points),
+                ]
+                .into_iter()
+                .filter(move |(_, ids)| aliases.iter().any(|node| ids.contains(&node.file_id)))
+                .map(move |(role, _)| ReferenceRoot {
+                    path: path.clone(),
+                    role,
+                })
+            })
+            .collect();
+        let mut digest = Sha256::new();
+        digest.update(config.cache_config_hash.to_le_bytes());
+        digest.update([u8::from(config.production)]);
+        for (path, aliases) in &nodes {
+            digest.update((path.len() as u64).to_le_bytes());
+            digest.update(path.as_bytes());
+            digest.update([
+                u8::from(sources.binary_search(path).is_ok()),
+                u8::from(aliases.iter().any(|node| node.is_entry_point())),
+                u8::from(aliases.iter().any(|node| node.is_reachable())),
+                u8::from(aliases.iter().any(|node| node.is_runtime_reachable())),
+                u8::from(aliases.iter().any(|node| node.is_test_reachable())),
+                u8::from(
+                    aliases
+                        .iter()
+                        .any(|node| self.inner.runtime_entry_points.contains(&node.file_id)),
+                ),
+                u8::from(
+                    aliases
+                        .iter()
+                        .any(|node| self.inner.test_entry_points.contains(&node.file_id)),
+                ),
+            ]);
+        }
+        let fingerprint = digest
+            .finalize()
+            .iter()
+            .fold(String::new(), |mut hex, byte| {
+                let _ = write!(hex, "{byte:02x}");
+                hex
+            });
+        Ok(ReferenceScope::Graph {
+            mode: if config.production {
+                ReferenceScopeMode::Production
+            } else {
+                ReferenceScopeMode::All
+            },
+            sources,
+            roots,
+            fingerprint,
+        })
+    }
+
     /// Number of modules in the retained graph.
     #[must_use]
     pub fn module_count(&self) -> usize {
@@ -91,6 +189,23 @@ impl RetainedModuleGraph {
             .map(DirectImporterSummary::from)
             .collect()
     }
+}
+
+fn reference_source_identity(root: &Path, path: &Path) -> crate::EngineResult<String> {
+    let canonical = dunce::canonicalize(path).map_err(|error| {
+        crate::engine_error(format!(
+            "cannot resolve native reference source {}: {error}",
+            path.display()
+        ))
+    })?;
+    let relative = canonical.strip_prefix(root).map_err(|_| {
+        crate::engine_error(format!(
+            "native reference source {} resolves outside graph root {}",
+            path.display(),
+            root.display()
+        ))
+    })?;
+    Ok(normalize_path(relative))
 }
 
 /// Engine-owned view of root-correlated static test reachability.
@@ -1170,6 +1285,257 @@ mod tests {
             &files,
         );
         RetainedModuleGraph::from(graph)
+    }
+
+    fn semantic_scope_fixture(
+        crossed_root: bool,
+    ) -> (
+        tempfile::TempDir,
+        RetainedModuleGraph,
+        fallow_config::ResolvedConfig,
+    ) {
+        use fallow_config::{FallowConfig, OutputFormat};
+        let directory = tempfile::tempdir().expect("project directory");
+        let paths = [
+            "app.ts",
+            "helper.ts",
+            "shared.ts",
+            "orphan.ts",
+            "theme.css",
+            "types.d.ts",
+        ];
+        let files: Vec<_> = paths
+            .iter()
+            .enumerate()
+            .map(|(id, name)| DiscoveredFile {
+                id: FileId(id as u32),
+                path: directory.path().join(name),
+                size_bytes: 1,
+            })
+            .collect();
+        for file in &files {
+            std::fs::write(&file.path, "").expect("graph source");
+        }
+        let mut modules: Vec<_> = files
+            .iter()
+            .enumerate()
+            .map(|(id, file)| ResolvedModule {
+                file_id: file.id,
+                path: file.path.clone(),
+                resolved_imports: if id == 0 {
+                    vec![
+                        import(FileId(2), ImportedName::SideEffect),
+                        import(FileId(4), ImportedName::SideEffect),
+                        import(FileId(5), ImportedName::SideEffect),
+                    ]
+                } else if id == 1 {
+                    vec![import(FileId(2), ImportedName::SideEffect)]
+                } else {
+                    Vec::new()
+                },
+                ..ResolvedModule::default()
+            })
+            .collect();
+        if crossed_root {
+            modules[0]
+                .resolved_imports
+                .push(import(FileId(1), ImportedName::SideEffect));
+        }
+        let runtime = vec![EntryPoint {
+            path: files[0].path.clone(),
+            source: EntryPointSource::PackageJsonMain,
+        }];
+        let tests = vec![EntryPoint {
+            path: files[1].path.clone(),
+            source: EntryPointSource::TestFile,
+        }];
+        let roots = [runtime.clone(), tests.clone()].concat();
+        let graph =
+            RetainedModuleGraph::from(ModuleGraph::build_with_reachability_roots_and_replacements(
+                &modules,
+                &[],
+                &roots,
+                &runtime,
+                &tests,
+                &files,
+            ));
+        let config = FallowConfig::default().resolve(
+            directory.path().to_path_buf(),
+            OutputFormat::Json,
+            1,
+            true,
+            true,
+            None,
+        );
+        (directory, graph, config)
+    }
+
+    #[cfg(unix)]
+    fn project_reference_scope(
+        root: &std::path::Path,
+        names: &[&str],
+        all_roots: bool,
+    ) -> fallow_types::semantic::ReferenceScope {
+        use fallow_config::{FallowConfig, OutputFormat};
+        let files: Vec<_> = names
+            .iter()
+            .enumerate()
+            .map(|(id, name)| DiscoveredFile {
+                id: FileId(id as u32),
+                path: root.join(name),
+                size_bytes: 1,
+            })
+            .collect();
+        let modules: Vec<_> = files
+            .iter()
+            .map(|file| ResolvedModule {
+                file_id: file.id,
+                path: file.path.clone(),
+                ..ResolvedModule::default()
+            })
+            .collect();
+        let entry_files = &files[..if all_roots { files.len() } else { 1 }];
+        let runtime: Vec<_> = entry_files
+            .iter()
+            .map(|file| EntryPoint {
+                path: file.path.clone(),
+                source: EntryPointSource::PackageJsonMain,
+            })
+            .collect();
+        let tests: Vec<_> = entry_files
+            .iter()
+            .map(|file| EntryPoint {
+                path: file.path.clone(),
+                source: EntryPointSource::TestFile,
+            })
+            .collect();
+        let roots = [runtime.clone(), tests.clone()].concat();
+        let graph =
+            RetainedModuleGraph::from(ModuleGraph::build_with_reachability_roots_and_replacements(
+                &modules,
+                &[],
+                &roots,
+                &runtime,
+                &tests,
+                &files,
+            ));
+        let config = FallowConfig::default().resolve(
+            root.to_path_buf(),
+            OutputFormat::Json,
+            1,
+            true,
+            true,
+            None,
+        );
+        graph.reference_scope(&config).expect("native projection")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn semantic_reference_scope_canonicalizes_contained_source_links_and_roots() {
+        use fallow_types::semantic::{ReferenceRoot, ReferenceRootRole, ReferenceScope};
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("project directory");
+        let root = directory.path().join("project");
+        std::fs::create_dir_all(root.join("src")).expect("source directory");
+        std::fs::write(
+            root.join("src/inside-target.ts"),
+            "export const live = 1;\n",
+        )
+        .expect("contained source");
+        symlink("inside-target.ts", root.join("src/inside-link.ts")).expect("source link");
+        let linked_root = directory.path().join("project-link");
+        symlink(&root, &linked_root).expect("root link");
+
+        let canonical = project_reference_scope(&root, &["src/inside-target.ts"], true);
+        let ReferenceScope::Graph { sources, roots, .. } = &canonical else {
+            panic!("graph scope")
+        };
+        assert_eq!(sources, &["src/inside-target.ts"]);
+        assert_eq!(
+            roots,
+            &[
+                ReferenceRoot {
+                    path: "src/inside-target.ts".into(),
+                    role: ReferenceRootRole::Runtime,
+                },
+                ReferenceRoot {
+                    path: "src/inside-target.ts".into(),
+                    role: ReferenceRootRole::Test,
+                },
+            ]
+        );
+        for names in [
+            vec!["src/inside-link.ts"],
+            vec!["src/inside-link.ts", "src/inside-target.ts"],
+            vec!["src/inside-target.ts", "src/inside-link.ts"],
+        ] {
+            for project_root in [&root, &linked_root] {
+                assert_eq!(
+                    project_reference_scope(project_root, &names, true),
+                    canonical
+                );
+            }
+        }
+        assert_eq!(
+            project_reference_scope(
+                &root,
+                &["src/inside-link.ts", "src/inside-target.ts"],
+                false,
+            ),
+            canonical,
+            "an unreachable alias cannot erase the eligible native identity"
+        );
+    }
+
+    #[test]
+    fn semantic_reference_scope_preserves_root_roles_when_runtime_reaches_test_root() {
+        use fallow_types::semantic::{ReferenceRootRole, ReferenceScope};
+        let (_directory, graph, config) = semantic_scope_fixture(true);
+        let ReferenceScope::Graph { roots, .. } = graph.reference_scope(&config).expect("scope")
+        else {
+            panic!("graph scope")
+        };
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0].path, "app.ts");
+        assert_eq!(roots[0].role, ReferenceRootRole::Runtime);
+        assert_eq!(roots[1].path, "helper.ts");
+        assert_eq!(roots[1].role, ReferenceRootRole::Test);
+    }
+
+    #[test]
+    fn semantic_reference_scope_comes_from_native_root_roles_and_reachability() {
+        use fallow_types::semantic::{ReferenceRootRole, ReferenceScope, ReferenceScopeMode};
+        let (_directory, graph, mut config) = semantic_scope_fixture(false);
+        config.production = true;
+        let production = graph.reference_scope(&config).expect("native projection");
+        let ReferenceScope::Graph {
+            mode,
+            sources,
+            roots,
+            fingerprint,
+        } = &production
+        else {
+            panic!("graph scope")
+        };
+        assert_eq!(*mode, ReferenceScopeMode::Production);
+        assert_eq!(sources, &["app.ts", "shared.ts"]);
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0].role, ReferenceRootRole::Runtime);
+        assert_eq!(roots[1].role, ReferenceRootRole::Test);
+        assert_eq!(fingerprint.len(), 64);
+        config.production = false;
+        let ReferenceScope::Graph {
+            sources,
+            fingerprint: all_fingerprint,
+            ..
+        } = graph.reference_scope(&config).expect("all projection")
+        else {
+            panic!("graph scope")
+        };
+        assert_eq!(sources, ["app.ts", "helper.ts", "shared.ts"]);
+        assert_ne!(&all_fingerprint, fingerprint);
     }
 
     #[test]

@@ -166,7 +166,9 @@ const checkFile = (context, file) => {
 /** Type-checks each mutant of a parsed `mutant-typecheck` request. */
 export const checkMutants = (
   { root, files },
-  { createApi = (options) => new API({ ...options, tsserverPath: getSelectedBackend().path }) } = {},
+  {
+    createApi = (options) => new API({ ...options, tsserverPath: getSelectedBackend().path }),
+  } = {},
 ) => {
   if (files.length === 0) return [];
   const context = createOverlayApi(root, createApi);
