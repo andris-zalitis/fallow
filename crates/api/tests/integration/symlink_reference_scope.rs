@@ -7,8 +7,9 @@ use fallow_api::{
     DeadCodeFilters, EditorAnalysisSession, TypeAwareOptions, TypeAwareRequire, TypeAwareSession,
 };
 use fallow_config::DuplicatesConfig;
+use fallow_types::extract::MemberKind;
 use fallow_types::output_dead_code::UnusedClassMemberFinding;
-use fallow_types::results::{AnalysisResults, MemberKind, UnusedMember};
+use fallow_types::results::{AnalysisResults, UnusedMember};
 use fallow_types::semantic::{ReferenceScope, SemanticCandidateDecisionKind};
 
 use crate::common::{rerun_with_type_aware_sidecar, write};
@@ -106,7 +107,10 @@ fn contained_source_link_credits_one_canonical_caller_in_both_transports() {
         );
         assert_eq!(decision.total_evidence_count, 1);
         assert_eq!(decision.evidence.len(), 1);
-        assert_eq!(decision.evidence[0].path, "src/caller.ts");
+        assert_eq!(
+            decision.evidence[0].path,
+            std::path::Path::new("src/caller.ts")
+        );
         assert!(output.dead_code.results.unused_class_members.is_empty());
         decisions.push(decision.clone());
         coverages.push(meta.reference_scope.expect("attested scope"));
