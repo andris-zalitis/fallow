@@ -69,21 +69,8 @@ impl RetainedModuleGraph {
         })?;
         let mut identities = FxHashMap::<String, Vec<_>>::default();
         for node in &self.inner.modules {
-            let canonical = dunce::canonicalize(&node.path).map_err(|error| {
-                crate::engine_error(format!(
-                    "cannot resolve native reference source {}: {error}",
-                    node.path.display()
-                ))
-            })?;
-            let relative = canonical.strip_prefix(&root).map_err(|_| {
-                crate::engine_error(format!(
-                    "native reference source {} resolves outside graph root {}",
-                    node.path.display(),
-                    root.display()
-                ))
-            })?;
             identities
-                .entry(relative.to_string_lossy().replace('\\', "/"))
+                .entry(reference_source_identity(&root, &node.path)?)
                 .or_default()
                 .push(node);
         }
@@ -202,6 +189,23 @@ impl RetainedModuleGraph {
             .map(DirectImporterSummary::from)
             .collect()
     }
+}
+
+fn reference_source_identity(root: &Path, path: &Path) -> crate::EngineResult<String> {
+    let canonical = dunce::canonicalize(path).map_err(|error| {
+        crate::engine_error(format!(
+            "cannot resolve native reference source {}: {error}",
+            path.display()
+        ))
+    })?;
+    let relative = canonical.strip_prefix(root).map_err(|_| {
+        crate::engine_error(format!(
+            "native reference source {} resolves outside graph root {}",
+            path.display(),
+            root.display()
+        ))
+    })?;
+    Ok(normalize_path(relative))
 }
 
 /// Engine-owned view of root-correlated static test reachability.
@@ -1367,9 +1371,69 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn project_reference_scope(
+        root: &std::path::Path,
+        names: &[&str],
+        all_roots: bool,
+    ) -> fallow_types::semantic::ReferenceScope {
+        use fallow_config::{FallowConfig, OutputFormat};
+        let files: Vec<_> = names
+            .iter()
+            .enumerate()
+            .map(|(id, name)| DiscoveredFile {
+                id: FileId(id as u32),
+                path: root.join(name),
+                size_bytes: 1,
+            })
+            .collect();
+        let modules: Vec<_> = files
+            .iter()
+            .map(|file| ResolvedModule {
+                file_id: file.id,
+                path: file.path.clone(),
+                ..ResolvedModule::default()
+            })
+            .collect();
+        let entry_files = &files[..if all_roots { files.len() } else { 1 }];
+        let runtime: Vec<_> = entry_files
+            .iter()
+            .map(|file| EntryPoint {
+                path: file.path.clone(),
+                source: EntryPointSource::PackageJsonMain,
+            })
+            .collect();
+        let tests: Vec<_> = entry_files
+            .iter()
+            .map(|file| EntryPoint {
+                path: file.path.clone(),
+                source: EntryPointSource::TestFile,
+            })
+            .collect();
+        let roots = [runtime.clone(), tests.clone()].concat();
+        let graph = RetainedModuleGraph::from(
+            ModuleGraph::build_with_reachability_roots_and_replacements(
+                &modules,
+                &[],
+                &roots,
+                &runtime,
+                &tests,
+                &files,
+            ),
+        );
+        let config = FallowConfig::default().resolve(
+            root.to_path_buf(),
+            OutputFormat::Json,
+            1,
+            true,
+            true,
+            None,
+        );
+        graph.reference_scope(&config).expect("native projection")
+    }
+
+    #[cfg(unix)]
     #[test]
     fn semantic_reference_scope_canonicalizes_contained_source_links_and_roots() {
-        use fallow_config::{FallowConfig, OutputFormat};
         use fallow_types::semantic::{ReferenceRoot, ReferenceRootRole, ReferenceScope};
         use std::os::unix::fs::symlink;
 
@@ -1385,61 +1449,7 @@ mod tests {
         let linked_root = directory.path().join("project-link");
         symlink(&root, &linked_root).expect("root link");
 
-        let project = |root: &std::path::Path, names: &[&str], all_roots: bool| {
-            let files: Vec<_> = names
-                .iter()
-                .enumerate()
-                .map(|(id, name)| DiscoveredFile {
-                    id: FileId(id as u32),
-                    path: root.join(name),
-                    size_bytes: 1,
-                })
-                .collect();
-            let modules: Vec<_> = files
-                .iter()
-                .map(|file| ResolvedModule {
-                    file_id: file.id,
-                    path: file.path.clone(),
-                    ..ResolvedModule::default()
-                })
-                .collect();
-            let entry_files = &files[..if all_roots { files.len() } else { 1 }];
-            let runtime: Vec<_> = entry_files
-                .iter()
-                .map(|file| EntryPoint {
-                    path: file.path.clone(),
-                    source: EntryPointSource::PackageJsonMain,
-                })
-                .collect();
-            let tests: Vec<_> = entry_files
-                .iter()
-                .map(|file| EntryPoint {
-                    path: file.path.clone(),
-                    source: EntryPointSource::TestFile,
-                })
-                .collect();
-            let roots = [runtime.clone(), tests.clone()].concat();
-            let graph = RetainedModuleGraph::from(
-                ModuleGraph::build_with_reachability_roots_and_replacements(
-                    &modules,
-                    &[],
-                    &roots,
-                    &runtime,
-                    &tests,
-                    &files,
-                ),
-            );
-            let config = FallowConfig::default().resolve(
-                root.to_path_buf(),
-                OutputFormat::Json,
-                1,
-                true,
-                true,
-                None,
-            );
-            graph.reference_scope(&config).expect("native projection")
-        };
-        let canonical = project(&root, &["src/inside-target.ts"], true);
+        let canonical = project_reference_scope(&root, &["src/inside-target.ts"], true);
         let ReferenceScope::Graph { sources, roots, .. } = &canonical else {
             panic!("graph scope")
         };
@@ -1463,11 +1473,11 @@ mod tests {
             vec!["src/inside-target.ts", "src/inside-link.ts"],
         ] {
             for project_root in [&root, &linked_root] {
-                assert_eq!(project(project_root, &names, true), canonical);
+                assert_eq!(project_reference_scope(project_root, &names, true), canonical);
             }
         }
         assert_eq!(
-            project(
+            project_reference_scope(
                 &root,
                 &["src/inside-link.ts", "src/inside-target.ts"],
                 false,
