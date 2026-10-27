@@ -183,7 +183,11 @@ fn member_results_in_semantic_mode(
     graph: &TestGraphFixture,
     semantic: bool,
 ) -> fallow_types::results::AnalysisResults {
-    member_results_with_config(graph, &member_test_config(semantic), &SuppressionContext::empty())
+    member_results_with_config(
+        graph,
+        &member_test_config(semantic),
+        &SuppressionContext::empty(),
+    )
 }
 
 fn member_test_config(semantic: bool) -> fallow_config::ResolvedConfig {
@@ -306,7 +310,10 @@ fn semantic_candidates_preserve_each_members_syntactic_visibility() {
 
     let ordinary = member_results_in_semantic_mode(&graph, false);
     assert_eq!(ordinary.unused_class_members.len(), 1);
-    assert_eq!(ordinary.unused_class_members[0].member.member_name, "untouched");
+    assert_eq!(
+        ordinary.unused_class_members[0].member.member_name,
+        "untouched"
+    );
     assert!(!ordinary.unused_class_members[0].semantic_only_candidate);
 
     let semantic = member_results_in_semantic_mode(&graph, true);
@@ -316,7 +323,11 @@ fn semantic_candidates_preserve_each_members_syntactic_visibility() {
         .map(|finding| {
             assert_eq!(finding.member.path, Path::new("/src/worker.ts"));
             assert_eq!(finding.member.parent_name, "Worker");
-            (finding.member.member_name.as_str(), finding.member.kind, finding.semantic_only_candidate)
+            (
+                finding.member.member_name.as_str(),
+                finding.member.kind,
+                finding.semantic_only_candidate,
+            )
         })
         .collect::<Vec<_>>();
     candidates.sort_by_key(|(name, _, _)| *name);
@@ -358,7 +369,10 @@ fn semantic_class_collection_preserves_enum_and_store_visibility() {
         }
         for semantic in [false, true] {
             let results = member_results_in_semantic_mode(&graph, semantic);
-            assert_eq!(results.unused_class_members.len(), if semantic { 1 } else { classes });
+            assert_eq!(
+                results.unused_class_members.len(),
+                if semantic { 1 } else { classes }
+            );
             assert_eq!(results.unused_enum_members.len(), enums);
             assert_eq!(results.unused_store_members.len(), stores);
             if let Some(finding) = results.unused_class_members.first() {
@@ -394,9 +408,8 @@ fn semantic_candidates_respect_suppression_and_rule_severity() {
         )],
     );
     let suppressions = [Suppression::issue(1, 0, IssueKind::UnusedClassMember)];
-    let suppressed = SuppressionContext::from_map(FxHashMap::from_iter([
-        (FileId(1), suppressions.as_slice()),
-    ]));
+    let suppressed =
+        SuppressionContext::from_map(FxHashMap::from_iter([(FileId(1), suppressions.as_slice())]));
     for semantic in [false, true] {
         let mut config = member_test_config(semantic);
         let results = member_results_with_config(&graph, &config, &SuppressionContext::empty());

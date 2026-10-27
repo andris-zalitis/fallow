@@ -931,7 +931,10 @@ impl MemberReportContext<'_, '_> {
 
         let export_key = ExportKey::new(module.file_id, export_name.clone());
         let syntactically_hidden = self.export_member_scan_skipped(module, export, store_only_scan)
-            || self.prepared.whole_object_used_exports.contains(&export_key);
+            || self
+                .prepared
+                .whole_object_used_exports
+                .contains(&export_key);
         if syntactically_hidden && !self.input.semantic_class_members {
             return;
         }
