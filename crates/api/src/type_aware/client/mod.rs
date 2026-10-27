@@ -1736,10 +1736,9 @@ fn validate_symbol_use_data(
     let SymbolUseValidation {
         root,
         requested,
-        requested_framework_contracts,
-        requested_runtime_entries,
         result,
         fix_supported,
+        ..
     } = validation;
     if data.total_reference_count != result.total_evidence_count {
         return Err(TypeAwareError::from(format!(
@@ -1797,6 +1796,29 @@ fn validate_symbol_use_data(
             "type-aware query {} claimed complete references with runtime omissions", result.query_id
         )));
     }
+    validate_symbol_use_contracts(validation, data)?;
+    if fix_supported {
+        validate_edit_guard(
+            root,
+            &data.symbol,
+            &data.edit_guard,
+            result.query_id,
+            source_cache,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_symbol_use_contracts(
+    validation: SymbolUseValidation<'_>,
+    data: &SymbolUseData,
+) -> Result<(), TypeAwareError> {
+    let SymbolUseValidation {
+        requested_framework_contracts,
+        requested_runtime_entries,
+        result,
+        ..
+    } = validation;
     if data.runtime_contracts.iter().any(|entry| !requested_runtime_entries.contains(entry)) {
         return Err(TypeAwareError::from(format!(
             "type-aware query {} returned an unrequested native runtime contract", result.query_id
@@ -1826,15 +1848,6 @@ fn validate_symbol_use_data(
     }
     for contract in &data.framework_contract_relations {
         validate_semantic_response_path(&contract.declaration.path, result.query_id)?;
-    }
-    if fix_supported {
-        validate_edit_guard(
-            root,
-            &data.symbol,
-            &data.edit_guard,
-            result.query_id,
-            source_cache,
-        )?;
     }
     Ok(())
 }
@@ -2640,7 +2653,8 @@ mod tests {
                 local_name: "run".to_string(), owner: Some("Worker".to_string()), line: 2, col: 2,
             }, origin: SemanticRuntimeOrigin::ExplicitMember,
         };
-        assert_eq!(runtime_entry_digest(std::slice::from_ref(&entry)).unwrap(),
+        assert_eq!(runtime_entry_digest(std::slice::from_ref(&entry))
+            .expect("explicit runtime-entry fixture must serialize for its contract digest"),
             "8c57d04e39dfa197a7a35e781723bcd20b0767ddb4906c22fd2b29e24a34f7a9");
         let mut request = request_with_all_operations(Path::new("/project"));
         request.runtime_entries = vec![entry];
