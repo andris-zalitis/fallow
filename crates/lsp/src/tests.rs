@@ -79,8 +79,10 @@ fn rerun_type_aware_project_test(test_name: &str, missing_companion: bool) -> bo
     } else if std::env::var_os("FALLOW_TYPE_AWARE_BIN").is_none() {
         command.env(
             "FALLOW_TYPE_AWARE_BIN",
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../tools/type-aware-sidecar/fallow-type-aware.mjs"),
+            PathBuf::from(
+                std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"),
+            )
+            .join("../../tools/type-aware-sidecar/fallow-type-aware.mjs"),
         );
     }
     let output = command.output().expect("isolated semantic project test");
