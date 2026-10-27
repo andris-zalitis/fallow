@@ -144,11 +144,7 @@ fn append_symbol_use_queries(
         targets.insert(id, QueryTarget::UnusedType(index));
     }
 
-    Ok(
-        results.unused_exports.len() - export_count
-            + results.unused_types.len()
-            - type_count,
-    )
+    Ok(results.unused_exports.len() - export_count + results.unused_types.len() - type_count)
 }
 
 fn export_symbol(

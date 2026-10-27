@@ -676,7 +676,9 @@ if (session) {
 "#,
         )
         .expect("write recording sidecar");
-        let mut permissions = fs::metadata(&sidecar).expect("sidecar metadata").permissions();
+        let mut permissions = fs::metadata(&sidecar)
+            .expect("sidecar metadata")
+            .permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&sidecar, permissions).expect("executable sidecar");
         let sidecar = sidecar.canonicalize().expect("canonical sidecar");
@@ -690,8 +692,14 @@ if (session) {
         let padding = response["padding"].as_str().expect("full response");
         assert_eq!(padding.len(), 32 * 1024 * 1024 + 1);
         assert!(padding.bytes().all(|byte| byte == b'p'));
-        assert_eq!(std::fs::read_to_string(install.join("launches")).expect("launch record"), "1\n");
-        assert_eq!(std::fs::read_to_string(install.join("requests")).expect("request record"), "1\n");
+        assert_eq!(
+            std::fs::read_to_string(install.join("launches")).expect("launch record"),
+            "1\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(install.join("requests")).expect("request record"),
+            "1\n"
+        );
     }
 
     #[cfg(unix)]
@@ -953,24 +961,13 @@ for await (const line of lines) {
 
     #[cfg(unix)]
     #[test]
-    fn persistent_session_restarts_once_with_full_invalidation() {
+    fn persistent_session_returns_first_transport_error_without_replay() {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
 
         #[derive(Serialize)]
         struct Request {
             value: u32,
-        }
-
-        #[derive(Debug, Deserialize)]
-        struct Response {
-            value: u32,
-            request_id: u64,
-            revision: u64,
-            invalidate_all: bool,
-            launches: u32,
-            first_process_id: u32,
-            process_id: u32,
         }
 
         let _lifecycle_lock = lock_sidecar_lifecycle_tests();
@@ -1037,18 +1034,22 @@ for await (const line of lines) {
             cancellation: None,
         };
 
-        let response: Response = session
-            .run_semantic_request(&canonical_root, &Request { value: 7 }, None)
-            .expect("request succeeds after one restart");
+        let error = session
+            .run_semantic_request::<_, serde_json::Value>(
+                &canonical_root,
+                &Request { value: 7 },
+                None,
+            )
+            .expect_err("the first transport error must be returned without replay");
 
-        assert_eq!(response.value, 7);
-        assert_eq!(response.request_id, 2);
-        assert_eq!(response.revision, 2);
-        assert!(response.invalidate_all);
-        assert_eq!(response.launches, 2);
-        assert_ne!(response.first_process_id, response.process_id);
-        assert_eq!(session.request_id, 2);
-        assert_eq!(session.revision, 2);
+        assert!(error.to_string().contains("response identity mismatch"), "{error}");
+        let state: serde_json::Value = serde_json::from_slice(
+            &fs::read(install.path().join(".session-restart-state.json")).expect("launch record"),
+        )
+        .expect("recorded state");
+        assert_eq!(state["launches"], 1);
+        assert_eq!(session.request_id, 1);
+        assert_eq!(session.revision, 1);
     }
 
     #[cfg(unix)]
