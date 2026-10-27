@@ -899,7 +899,7 @@ const resolvedAnchorTarget = (project, anchor, requestedSymbol) => {
       ? { declaration: anchor, namespace: requestedSymbol.namespace }
       : undefined;
   }
-  const checkerSymbol = project.checker.getSymbolAtLocation(anchor.name);
+  const checkerSymbol = symbolForDeclaration(project, anchor);
   const declarations = declarationsForSymbol(project, resolveAlias(project.checker, checkerSymbol));
   const exact = declarations.find((node) =>
     declarationNamespaces(node).has(requestedSymbol.namespace),

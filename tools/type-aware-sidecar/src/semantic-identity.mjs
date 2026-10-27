@@ -2,12 +2,15 @@ import path from "node:path";
 
 import { SymbolFlags } from "typescript/unstable/sync";
 import {
+  isBindingElement,
   isClassDeclaration,
   isClassExpression,
   isEnumDeclaration,
+  isExportAssignment,
   isExportSpecifier,
   isFunctionDeclaration,
   isGetAccessorDeclaration,
+  isIdentifier,
   isInterfaceDeclaration,
   isMethodDeclaration,
   isMethodSignatureDeclaration,
@@ -30,7 +33,7 @@ const DECLARATION_KIND_RULES = [
   [[isEnumDeclaration], "enum"],
   [[isFunctionDeclaration], "function"],
   [[isModuleDeclaration], "namespace"],
-  [[isVariableDeclaration], "variable"],
+  [[isVariableDeclaration, isBindingElement], "variable"],
   [
     [
       isMethodDeclaration,
@@ -108,7 +111,8 @@ export const ownerDeclaration = (node) => {
 
 export const isDeclaration = (node) => declarationKind(node) !== undefined;
 
-export const isExportAnchor = (node) => isExportSpecifier(node) || isNamespaceExport(node);
+export const isExportAnchor = (node) =>
+  isExportSpecifier(node) || isNamespaceExport(node) || isExportAssignment(node);
 
 const visit = (node, callback) => {
   callback(node);
@@ -170,19 +174,36 @@ const indexNamespaceExport = (index, node) => {
     );
 };
 
+const indexDefaultAssignment = (index, node) => {
+  if (node.isExportEquals) return;
+  const names = {
+    localName: isIdentifier(node.expression) ? nodeText(node.expression) : "default",
+    exportedName: "default",
+  };
+  positions(node).forEach((position) => indexExportPosition(index, node, names, position));
+};
+
 const defaultModifierFor = (node) =>
   node.modifiers?.find((modifier) => modifier.getText(node.getSourceFile()) === "default");
 
+const declarationOwnerNames = (node) => {
+  const names = new Set([declarationOwner(node)]);
+  const owner = ownerDeclaration(node);
+  if (owner === node.parent && isClassDeclaration(owner) && isSourceFile(owner.parent)) {
+    const exportedOwner = defaultModifierFor(owner);
+    if (exportedOwner) names.add(exportedOwner.getText(owner.getSourceFile()));
+  }
+  return names;
+};
+
 const indexNamedDeclaration = (index, node, localName) => {
+  const owners = declarationOwnerNames(node);
   for (const position of positions(node)) {
-    const common = {
-      localName,
-      exportedName: localName,
-      owner: declarationOwner(node),
-      ...position,
-    };
-    index.set(anchorKey({ declarationKind: declarationKind(node), ...common }), node);
-    index.set(anchorKey({ declarationKind: "export", ...common }), node);
+    for (const owner of owners) {
+      const common = { localName, exportedName: localName, owner, ...position };
+      index.set(anchorKey({ declarationKind: declarationKind(node), ...common }), node);
+      index.set(anchorKey({ declarationKind: "export", ...common }), node);
+    }
   }
 };
 
@@ -220,6 +241,10 @@ const declarationIndex = (sourceFile) => {
       indexNamespaceExport(index, node);
       return;
     }
+    if (isExportAssignment(node)) {
+      indexDefaultAssignment(index, node);
+      return;
+    }
     indexDeclarationNode(index, node);
   });
   declarationIndexes.set(sourceFile, index);
@@ -251,8 +276,15 @@ export const declarationMemberGroup = (declaration) => {
   return groups.get(declarationName(declaration)) ?? [];
 };
 
-export const symbolForDeclaration = (project, declaration) =>
-  project.checker.getSymbolAtLocation(declaration.name ?? declaration);
+export const symbolForDeclaration = (project, declaration) => {
+  if (isExportAssignment(declaration)) {
+    const moduleSymbol = project.checker.getSymbolAtLocation(declaration.getSourceFile());
+    return moduleSymbol
+      ? project.checker.getExportsOfModule(moduleSymbol).find((symbol) => symbol.name === "default")
+      : undefined;
+  }
+  return project.checker.getSymbolAtLocation(declaration.name ?? declaration);
+};
 
 export const resolveAlias = (checker, symbol) => {
   if (!symbol) return undefined;
@@ -298,7 +330,7 @@ export const stableSymbolIdentity = (root, declaration, namespace, exportedName)
 };
 
 export const semanticQueryIdentity = (root, query, resolved) => {
-  if (query.symbol.declarationKind !== "export") {
+  if (!["export", "class_method", "class_property"].includes(query.symbol.declarationKind)) {
     return stableSymbolIdentity(
       root,
       resolved.declaration,
