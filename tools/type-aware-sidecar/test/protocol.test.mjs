@@ -3,6 +3,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { parseRequest } from "../src/protocol.mjs";
+import { runtimeEntryDigest } from "../src/runtime-contracts.mjs";
 import { ANALYSIS_OPERATION, WIRE_PROTOCOL_VERSION } from "../src/generated-protocol.mjs";
 
 const symbolQuery = (id, declarationKind) => ({
@@ -25,8 +26,41 @@ const request = (queries) => ({
   operation: ANALYSIS_OPERATION,
   root: path.resolve("."),
   projects: [],
+  runtime_entries: [],
   reference_scope: { kind: "compiler-program" },
   queries,
+});
+
+test("runtime entry set is required, exact and independent of candidate capacity", () => {
+  const entries = Array.from({ length: 25_003 }, (_, index) => ({
+    symbol: symbolQuery(index, "class_method").symbol,
+    origin: "explicit-member",
+  }));
+  const input = { ...request([]), runtime_entries: entries };
+  const parsed = parseRequest(input);
+  assert.equal(parsed.queries.length, 0);
+  assert.equal(parsed.runtimeEntries.length, 25_003);
+  assert.equal(parsed.runtimeEntries.at(-1).symbol.exportedName, "member25002");
+  assert.equal(runtimeEntryDigest(parsed.runtimeEntries), runtimeEntryDigest(parsed.runtimeEntries.toReversed()));
+  const { runtime_entries: omitted, ...missing } = input;
+  assert.equal(omitted.length, 25_003);
+  assert.throws(() => parseRequest(missing), /runtime_entries must be an array/u);
+  assert.throws(() => parseRequest({ ...input, runtime_entries: [...entries, entries[0]] }), /duplicates a runtime entry/u);
+  for (const [change, expected] of [
+    [{ origin: "guessed-framework" }, /origin is unsupported/u],
+    [{ symbol: { ...entries[0].symbol, namespace: "type" } }, /value namespace/u],
+    [{ symbol: { ...entries[0].symbol, path: "../outside.ts" } }, /within root/u],
+  ]) {
+    assert.throws(() => parseRequest({ ...request([]), runtime_entries: [{ ...entries[0], ...change }] }), expected);
+  }
+});
+
+test("runtime entry digest shares the native canonical identity contract", () => {
+  const symbol = { ...symbolQuery(0, "class_method").symbol,
+    path: "src/config.ts", exported_name: "run", local_name: "run", owner: "Worker", line: 2, col: 2,
+  };
+  const entries = parseRequest({ ...request([]), runtime_entries: [{ symbol, origin: "explicit-member" }] }).runtimeEntries;
+  assert.equal(runtimeEntryDigest(entries), "8c57d04e39dfa197a7a35e781723bcd20b0767ddb4906c22fd2b29e24a34f7a9");
 });
 
 test("class symbol-use queries retain every exact identity beyond the nonclass budget", () => {

@@ -56,6 +56,7 @@ const write = (root, relativePath, contents) => {
 
 const semanticRequest = (root, queries, options = {}) => ({
   protocol_version: WIRE_PROTOCOL_VERSION,
+  runtime_entries: [],
   reference_scope: { kind: "compiler-program" },
   operation: ANALYSIS_OPERATION,
   root,
@@ -673,9 +674,16 @@ test("protocol v7 does not treat paired accessors as uses of each other", () => 
 
     assert.deepEqual(
       response.results.map(({ assertion }) => assertion),
-      ["no-confirmed-use", "no-confirmed-use"],
+      ["confirmed-no-static-references", "confirmed-no-static-references"],
     );
-    assert.ok(response.results.every(({ reason_code }) => reason_code === "accessor-pair"));
+    assert.equal(response.results.length, 2);
+    for (const result of response.results) {
+      assert.equal(result.status, "complete");
+      assert.equal(result.data.reference_complete, true);
+      assert.deepEqual(result.data.edit_reasons, ["accessor-pair"]);
+      assert.equal(result.data.closed_world_eligible, false);
+      assert.deepEqual(result.omissions, []);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1837,7 +1845,7 @@ test("protocol v7 preserves required interface, abstract, and inherited contract
   }
 });
 
-test("protocol v7 abstains for optional contracts, decorators, and dynamic member access", () => {
+test("reference completeness is independent of declaration edit constraints", () => {
   const cases = [
     {
       reason: "optional-contract",
@@ -1941,9 +1949,18 @@ test("protocol v7 abstains for optional contracts, decorators, and dynamic membe
         semanticRequest(root, [{ id: 44, operation: "symbol-use", symbol }]),
       );
       const result = response.results[0];
-      assert.equal(result.assertion, "no-confirmed-use");
-      assert.equal(result.status, "partial");
-      assert.equal(result.reason_code, expected.reason);
+      const runtimeGap = ["decorated-declaration", "dynamic-member-access"].includes(expected.reason);
+      assert.equal(result.assertion, runtimeGap ? "no-confirmed-use" : "confirmed-no-static-references");
+      assert.equal(result.status, runtimeGap ? "partial" : "complete");
+      assert.equal(result.data.reference_complete, !runtimeGap);
+      if (runtimeGap) {
+        assert.equal(result.reason_code, expected.reason);
+        assert.deepEqual(result.data.edit_reasons, []);
+      } else {
+        assert.deepEqual(result.data.edit_reasons, [expected.reason]);
+        assert.deepEqual(result.omissions, []);
+        assert.equal(result.actions.length, 1);
+      }
       assert.equal(result.data.closed_world_eligible, false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -3240,11 +3257,21 @@ test("native runtime entries preserve exact contracts without inventing referenc
     assert.deepEqual(dead.data.runtime_contracts, []);
     assert.equal(response.referenceScopeCoverage.entry_count, 3);
     assert.match(response.referenceScopeCoverage.entry_digest, /^[a-f0-9]{64}$/u);
+    const entriesOnly = analyzeSemanticQueries({ ...request, queries: [] });
+    assert.deepEqual(entriesOnly.results, []);
+    assert.equal(entriesOnly.referenceScopeCoverage.entry_count, 3);
+    assert.equal(entriesOnly.referenceScopeCoverage.entry_digest, response.referenceScopeCoverage.entry_digest);
     const session = createSemanticSession(root);
     try {
       const persistent = session.analyze(request, { revision: 1 });
       assert.deepEqual(persistent.results, response.results);
       assert.deepEqual(persistent.referenceScopeCoverage, response.referenceScopeCoverage);
+      assert.throws(() => session.analyze({
+        ...request,
+        runtimeEntries: [{ ...runtimeEntries[0], symbol: { ...runtimeEntries[0].symbol,
+          localName: "missing", exportedName: "missing",
+        } }],
+      }, { revision: 2 }), /runtime entry 0 .*no complete exact declaration ownership/u);
     } finally {
       session.close();
     }

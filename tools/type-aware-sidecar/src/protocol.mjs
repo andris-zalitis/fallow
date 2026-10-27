@@ -8,6 +8,7 @@ import {
   WIRE_PROTOCOL_VERSION,
 } from "./generated-protocol.mjs";
 import { canonicalFileIdentity } from "./file-identity.mjs";
+import { runtimeEntryKey } from "./runtime-contracts.mjs";
 import { normalizePhaseTimings, normalizeSemanticResult } from "./response-normalization.mjs";
 
 const require = createRequire(import.meta.url);
@@ -29,6 +30,11 @@ const BATCH_REQUEST_KEYS = new Set([
   "queries",
   "evidence_limit",
   "reference_scope",
+  "runtime_entries",
+]);
+const RUNTIME_ENTRY_KEYS = new Set(["symbol", "origin"]);
+const RUNTIME_ENTRY_ORIGINS = new Set([
+  "public-api", "explicit-member", "custom-element-lifecycle", "error-runtime", "openlayers-interaction",
 ]);
 const SYMBOL_QUERY_KEYS = new Set(["id", "operation", "symbol"]);
 const SYMBOL_USE_QUERY_KEYS = new Set(["id", "operation", "symbol", "framework_contracts"]);
@@ -196,6 +202,30 @@ const parseEntryPoints = (value, field, root) =>
   requireBoundedArray(value ?? [], field, MAX_PROJECTS).map((entryPoint, index) =>
     parseCandidatePath(entryPoint, `${field}[${index}]`, root),
   );
+
+const parseRuntimeEntries = (value, root) => {
+  const identities = new Set();
+  return requireArray(value, "runtime_entries").map((entry, index) => {
+    const field = `runtime_entries[${index}]`;
+    requireObject(entry, field);
+    requireExactKeys(entry, RUNTIME_ENTRY_KEYS, field);
+    const origin = requireString(entry.origin, `${field}.origin`);
+    if (!RUNTIME_ENTRY_ORIGINS.has(origin)) throw new Error(`${field}.origin is unsupported`);
+    const symbol = parseSymbolIdentity(entry.symbol, `${field}.symbol`, root);
+    if (symbol.namespace !== "value") throw new Error(`${field}.symbol must use the value namespace`);
+    if (!["export", "class_method", "class_property"].includes(symbol.declarationKind)) {
+      throw new Error(`${field}.symbol must be an export or class member`);
+    }
+    if (symbol.declarationKind === "export" && origin !== "public-api") {
+      throw new Error(`${field} export exposure requires public-api origin`);
+    }
+    const parsed = { symbol, origin };
+    const identity = runtimeEntryKey(parsed);
+    if (identities.has(identity)) throw new Error(`${field} duplicates a runtime entry`);
+    identities.add(identity);
+    return parsed;
+  });
+};
 
 const parsePrivateLeakCandidates = (value, field, root) => {
   const candidates = requireBoundedArray(value ?? [], field, MAX_PRIVATE_LEAK_CANDIDATES).map(
@@ -455,6 +485,7 @@ const parseBatchRequest = (value) => {
     queries,
     evidenceLimit,
     referenceScope: parseReferenceScope(value.reference_scope, root),
+    runtimeEntries: parseRuntimeEntries(value.runtime_entries, root),
   };
 };
 

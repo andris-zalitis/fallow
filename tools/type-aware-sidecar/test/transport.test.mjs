@@ -16,6 +16,7 @@ const formerLimit = 8 * 1024 * 1024;
 const padding = " ".repeat(formerLimit + 1);
 const semanticRequest = (root) => ({
   protocol_version: WIRE_PROTOCOL_VERSION,
+  runtime_entries: [],
   reference_scope: { kind: "compiler-program" },
   operation: ANALYSIS_OPERATION,
   root,

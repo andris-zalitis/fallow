@@ -232,6 +232,25 @@ export const findDeclaration = (sourceFile, identity) => {
   return declarationNamespaces(anchor).has(identity.namespace) ? anchor : undefined;
 };
 
+const ownerMemberGroups = new WeakMap();
+
+/** Borrow the owner's existing declaration group without rescanning siblings. */
+export const declarationMemberGroup = (declaration) => {
+  const owner = ownerDeclaration(declaration);
+  if (!owner?.members) return [];
+  let groups = ownerMemberGroups.get(owner);
+  if (!groups) {
+    groups = new Map();
+    for (const member of owner.members) {
+      const name = declarationName(member);
+      if (!groups.has(name)) groups.set(name, []);
+      groups.get(name).push(member);
+    }
+    ownerMemberGroups.set(owner, groups);
+  }
+  return groups.get(declarationName(declaration)) ?? [];
+};
+
 export const symbolForDeclaration = (project, declaration) =>
   project.checker.getSymbolAtLocation(declaration.name ?? declaration);
 

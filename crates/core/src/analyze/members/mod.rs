@@ -20,6 +20,9 @@ use fallow_types::extract::{
     PlaywrightTestBindingFact, SemanticFactView, TypedPropertyMemberAccessFact,
     ordinary_whole_object_uses,
 };
+use fallow_types::semantic::{
+    SemanticNamespace, SemanticRuntimeEntry, SemanticRuntimeOrigin, SemanticSymbol,
+};
 
 use super::predicates::{is_angular_lifecycle_method, is_react_lifecycle_method};
 use super::{LineOffsetsMap, byte_offset_to_line_col};
@@ -734,6 +737,8 @@ pub struct UnusedMemberResults {
     pub class_members: Vec<UnusedClassMemberCandidate>,
     /// Unused store members (Pinia stores).
     pub store_members: Vec<UnusedMember>,
+    /// Exact native contracts, including declarations absent from findings.
+    pub runtime_entries: Vec<SemanticRuntimeEntry>,
 }
 
 /// A class-member candidate with its ordinary syntactic visibility provenance.
@@ -832,6 +837,7 @@ struct PreparedMemberScan<'a> {
     accessed_members: FxHashMap<ExportKey, FxHashSet<String>>,
     self_accessed_members: FxHashMap<FileId, FxHashSet<String>>,
     whole_object_used_exports: FxHashSet<ExportKey>,
+    public_exports: FxHashSet<ExportKey>,
     public_class_exports: FxHashSet<ExportKey>,
     error_subclass_keys: FxHashSet<ExportKey>,
     ol_interaction_subclass_keys: FxHashSet<ExportKey>,
@@ -841,6 +847,7 @@ type MemberScanBuckets = (
     Vec<UnusedMember>,
     Vec<UnusedClassMemberCandidate>,
     Vec<UnusedMember>,
+    Vec<SemanticRuntimeEntry>,
 );
 
 struct MemberReportContext<'a, 'scan> {
@@ -857,6 +864,7 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
     let mut unused_enum_members = Vec::new();
     let mut unused_class_members = Vec::new();
     let mut unused_store_members = Vec::new();
+    let mut runtime_entries = Vec::new();
     let allowlist = ClassMemberAllowlist::from_rules(input.user_class_member_allowlist);
     let semantic_framework_candidates =
         ClassMemberAllowlist::from_rules(input.semantic_framework_candidates);
@@ -874,11 +882,14 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
     }
     .collect();
 
-    for (enum_members, class_members, store_members) in member_results {
+    for (enum_members, class_members, store_members, entries) in member_results {
         unused_enum_members.extend(enum_members);
         unused_class_members.extend(class_members);
         unused_store_members.extend(store_members);
+        runtime_entries.extend(entries);
     }
+    runtime_entries.sort();
+    runtime_entries.dedup();
 
     allowlist.warn_unmatched_patterns();
     ignore_decorators.warn_unmatched();
@@ -887,6 +898,7 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
         enum_members: unused_enum_members,
         class_members: unused_class_members,
         store_members: unused_store_members,
+        runtime_entries,
     }
 }
 
@@ -901,7 +913,7 @@ impl MemberReportContext<'_, '_> {
     }
 
     fn collect_module(&self, module: &crate::graph::ModuleNode) -> MemberScanBuckets {
-        let mut buckets = (Vec::new(), Vec::new(), Vec::new());
+        let mut buckets = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         if !module.is_reachable() {
             return buckets;
         }
@@ -930,6 +942,27 @@ impl MemberReportContext<'_, '_> {
         }
 
         let export_key = ExportKey::new(module.file_id, export_name.clone());
+        if self.input.semantic_class_members
+            && !export.is_type_only
+            && self.prepared.public_exports.contains(&export_key)
+        {
+            let (line, col) = byte_offset_to_line_col(
+                self.input.line_offsets_by_file, module.file_id, export.span.start,
+            );
+            buckets.3.push(SemanticRuntimeEntry {
+                symbol: SemanticSymbol {
+                    path: module.path.clone(),
+                    namespace: SemanticNamespace::Value,
+                    declaration_kind: "export".to_string(),
+                    exported_name: export_name.clone(),
+                    local_name: export_name.clone(),
+                    owner: None,
+                    line,
+                    col,
+                },
+                origin: SemanticRuntimeOrigin::PublicApi,
+            });
+        }
         let syntactically_hidden = self.export_member_scan_skipped(module, export, store_only_scan)
             || self
                 .prepared
@@ -1021,6 +1054,30 @@ impl MemberReportContext<'_, '_> {
         skip_context: &MemberSkipContext<'_>,
         buckets: &mut MemberScanBuckets,
     ) {
+        if self.input.semantic_class_members
+            && let Some(origin) = native_member_runtime_contract(member, skip_context)
+        {
+            let (line, col) = byte_offset_to_line_col(
+                self.input.line_offsets_by_file, target.module.file_id, member.span.start,
+            );
+            buckets.3.push(SemanticRuntimeEntry {
+                symbol: SemanticSymbol {
+                    path: target.module.path.clone(),
+                    namespace: SemanticNamespace::Value,
+                    declaration_kind: match member.kind {
+                        MemberKind::ClassMethod => "class_method",
+                        MemberKind::ClassProperty => "class_property",
+                        _ => unreachable!(),
+                    }.to_string(),
+                    exported_name: member.name.clone(),
+                    local_name: member.name.clone(),
+                    owner: Some(target.export_name.to_string()),
+                    line,
+                    col,
+                },
+                origin,
+            });
+        }
         let syntactically_hidden = target.syntactically_hidden
             || (target.store_only_scan && member.kind != MemberKind::StoreMember)
             || should_skip_member_for_unused_report(member, skip_context);
@@ -1095,6 +1152,7 @@ fn prepare_member_scan(input: UnusedMemberScanInput<'_>) -> PreparedMemberScan<'
 
     let public_class_exports =
         public_class_export_origin_keys(input.graph, input.public_api_entry_points);
+    let public_exports = public_export_origin_keys(input.graph, input.public_api_entry_points);
 
     let error_subclass_keys = build_error_subclass_export_keys(
         &parent_to_children,
@@ -1110,6 +1168,7 @@ fn prepare_member_scan(input: UnusedMemberScanInput<'_>) -> PreparedMemberScan<'
         accessed_members,
         self_accessed_members,
         whole_object_used_exports,
+        public_exports,
         public_class_exports,
         error_subclass_keys,
         ol_interaction_subclass_keys,
@@ -1514,10 +1573,6 @@ fn should_skip_member_for_unused_report(member: &MemberInfo, ctx: &MemberSkipCon
         return true;
     }
 
-    if ctx.is_public_api_class_export && is_class_member_kind(member.kind) {
-        return true;
-    }
-
     if ctx
         .accessed_members
         .get(ctx.export_key)
@@ -1586,26 +1641,38 @@ fn class_member_runtime_credit_applies(member: &MemberInfo, ctx: &MemberSkipCont
         ctx.super_class,
         ctx.implemented_interfaces,
     );
-    is_class_member_kind(member.kind)
-        && (((is_react_lifecycle_method(&member.name)
+    native_member_runtime_contract(member, ctx).is_some()
+        || (is_class_member_kind(member.kind)
+        && ((is_react_lifecycle_method(&member.name)
             || is_angular_lifecycle_method(&member.name))
-            && !semantic_framework_candidate)
-            || is_native_custom_element_lifecycle_method(&member.name, ctx.super_class)
-            || is_error_subclass_runtime_member(
-                &member.name,
-                ctx.export_key,
-                ctx.error_subclass_keys,
-            )
-            || is_ol_interaction_dispatched_member(
-                &member.name,
-                ctx.export_key,
-                ctx.ol_interaction_subclass_keys,
-            )
-            || ctx.allowlist.matches(
-                member.name.as_str(),
-                ctx.super_class,
-                ctx.implemented_interfaces,
-            ))
+            && !semantic_framework_candidate))
+}
+
+/// The native preservation owner supplies contract provenance to both modes.
+/// Framework spellings need compiler validation and are not native contracts.
+fn native_member_runtime_contract(
+    member: &MemberInfo,
+    ctx: &MemberSkipContext<'_>,
+) -> Option<SemanticRuntimeOrigin> {
+    if !is_class_member_kind(member.kind) {
+        return None;
+    }
+    if ctx.is_public_api_class_export {
+        return Some(SemanticRuntimeOrigin::PublicApi);
+    }
+    if ctx.allowlist.matches(member.name.as_str(), ctx.super_class, ctx.implemented_interfaces) {
+        return Some(SemanticRuntimeOrigin::ExplicitMember);
+    }
+    if is_native_custom_element_lifecycle_method(&member.name, ctx.super_class) {
+        return Some(SemanticRuntimeOrigin::CustomElementLifecycle);
+    }
+    if is_error_subclass_runtime_member(&member.name, ctx.export_key, ctx.error_subclass_keys) {
+        return Some(SemanticRuntimeOrigin::ErrorRuntime);
+    }
+    if is_ol_interaction_dispatched_member(&member.name, ctx.export_key, ctx.ol_interaction_subclass_keys) {
+        return Some(SemanticRuntimeOrigin::OpenlayersInteraction);
+    }
+    None
 }
 
 fn record_seen_ignore_decorators(graph: &ModuleGraph, ignore_decorators: &IgnoreDecoratorSet) {

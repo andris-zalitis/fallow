@@ -427,6 +427,72 @@ fn semantic_candidates_respect_suppression_and_rule_severity() {
     }
 }
 
+#[test]
+fn runtime_entries_include_suppressed_public_members_and_non_candidate_exports() {
+    use crate::suppress::{IssueKind, Suppression};
+    let mut graph = build_graph(&[("/src/index.ts", true)]);
+    set_exports(&mut graph, 0, &[
+        make_export_with_members("Worker", vec![make_member("run", MemberKind::ClassMethod)], None),
+        make_export_with_members("publicRun", Vec::new(), None),
+    ]);
+    let suppressions = [Suppression::issue(1, 0, IssueKind::UnusedClassMember)];
+    let suppressed = SuppressionContext::from_map(FxHashMap::from_iter([(FileId(0), suppressions.as_slice())]));
+    let results = find_unused_members_with_public_api_entry_points(UnusedMemberScanInput {
+        graph: &graph,
+        resolved_modules: &graph.resolved_modules,
+        modules: &[],
+        suppressions: &suppressed,
+        line_offsets_by_file: &FxHashMap::default(),
+        user_class_member_allowlist: &[],
+        semantic_framework_candidates: &[],
+        semantic_class_members: true,
+        ignore_decorators: &[],
+        public_api_entry_points: &FxHashSet::from_iter([FileId(0)]),
+        lit_active: false,
+    });
+    assert!(results.class_members.is_empty());
+    assert_eq!(results.runtime_entries.len(), 3);
+    assert_eq!(results.runtime_entries.iter().map(|entry| (
+        entry.symbol.exported_name.as_str(), entry.symbol.owner.as_deref(), entry.origin,
+    )).collect::<Vec<_>>(), vec![
+        ("run", Some("Worker"), SemanticRuntimeOrigin::PublicApi),
+        ("Worker", None, SemanticRuntimeOrigin::PublicApi),
+        ("publicRun", None, SemanticRuntimeOrigin::PublicApi),
+    ]);
+}
+
+#[test]
+fn runtime_entries_survive_disabled_finding_rules_without_framework_spelling_credit() {
+    use fallow_config::Severity;
+    use super::super::{MemberDetectorInput, run_member_detectors};
+    let mut graph = build_graph(&[("/src/index.ts", true)]);
+    set_exports(&mut graph, 0, &[make_export_with_members("Worker", vec![
+        make_member("run", MemberKind::ClassMethod),
+        make_member("componentDidMount", MemberKind::ClassMethod),
+        make_member("ngOnInit", MemberKind::ClassMethod),
+    ], None)]);
+    let mut config = member_test_config(true);
+    config.rules.unused_class_members = Severity::Off;
+    config.rules.unused_enum_members = Severity::Off;
+    config.rules.unused_store_members = Severity::Off;
+    let results = run_member_detectors(MemberDetectorInput {
+        graph: &graph,
+        resolved_modules: &graph.resolved_modules,
+        modules: &[],
+        config: &config,
+        suppressions: &SuppressionContext::empty(),
+        line_offsets_by_file: &FxHashMap::default(),
+        user_class_members: &[UsedClassMemberRule::from("run")],
+        semantic_framework_candidates: &[],
+        public_api_entry_points: &FxHashSet::default(),
+        declared_deps: &FxHashSet::default(),
+    });
+    assert!(results.unused_class_members.is_empty());
+    assert_eq!(results.semantic_runtime_entries.len(), 1);
+    assert_eq!(results.semantic_runtime_entries[0].symbol.exported_name, "run");
+    assert_eq!(results.semantic_runtime_entries[0].origin, SemanticRuntimeOrigin::ExplicitMember);
+}
+
 fn make_resolved_import(source: &str, imported: &str, local: &str, target: u32) -> ResolvedImport {
     ResolvedImport {
         info: ImportInfo {

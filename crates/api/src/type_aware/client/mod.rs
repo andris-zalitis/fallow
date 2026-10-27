@@ -24,7 +24,7 @@ use fallow_types::semantic::{
     SemanticSourceLocation, SemanticSymbol, SemanticSymbolImpact, SemanticSymbolTrace,
     TypeCouplingCycle, TypeCouplingEdge, TypeCouplingFile, TypeCouplingReport, TypeCouplingSummary,
 };
-use fallow_types::semantic::{ReferenceScope, SemanticReferenceCoverage};
+use fallow_types::semantic::{ReferenceScope, SemanticReferenceCoverage, SemanticRuntimeEntry, SemanticEditReason};
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -42,7 +42,7 @@ use reconcile::semantic_only_candidate_stays_hidden;
 const EVIDENCE_LIMIT: usize = 40;
 /// A type-coupling result is one project-wide report, not one symbol, so it
 /// carries more evidence than [`EVIDENCE_LIMIT`]. The sidecar rejects a larger
-/// value. The bound keeps the response well below the semantic byte limit.
+/// value. It bounds presentation after complete project-wide accounting.
 const TYPE_COUPLING_EVIDENCE_LIMIT: usize = 10_000;
 const MAX_SEMANTIC_QUERIES: usize = 25_000;
 const MAX_PRIVATE_LEAK_CANDIDATES: usize = 25_000;
@@ -51,6 +51,7 @@ const MAX_PRIVATE_LEAK_CANDIDATES: usize = 25_000;
 #[serde(deny_unknown_fields)]
 struct SemanticRequest {
     reference_scope: ReferenceScope,
+    runtime_entries: Vec<SemanticRuntimeEntry>,
     protocol_version: u32,
     operation: &'static str,
     root: String,
@@ -317,6 +318,9 @@ struct SymbolUseData {
     total_reference_count: usize,
     contract_relations: Vec<SemanticContractEvidence>,
     framework_contract_relations: Vec<SemanticFrameworkContractEvidence>,
+    runtime_contracts: Vec<SemanticRuntimeEntry>,
+    reference_complete: bool,
+    edit_reasons: Vec<SemanticEditReason>,
     closed_world_eligible: bool,
     edit_guard: SemanticEditGuard,
 }
@@ -686,6 +690,11 @@ fn refine_dead_code_results_with_transport(
     }
     let request = SemanticRequest {
         reference_scope: reference_scope.clone(),
+        runtime_entries: if include_symbol_use {
+            protocol_runtime_entries(&canonical_root, &results.semantic_runtime_entries)?
+        } else {
+            Vec::new()
+        },
         protocol_version: PROTOCOL_VERSION,
         operation: OPERATION,
         root: canonical_root.to_string_lossy().into_owned(),
@@ -947,6 +956,7 @@ pub fn inspect_symbol(
     })?;
     let request = SemanticRequest {
         reference_scope: ReferenceScope::CompilerProgram,
+       runtime_entries: Vec::new(),
         protocol_version: PROTOCOL_VERSION,
         operation: OPERATION,
         root: canonical_root.to_string_lossy().into_owned(),
@@ -1319,6 +1329,7 @@ fn run_single_query(
     })?;
     let request = SemanticRequest {
         reference_scope: ReferenceScope::CompilerProgram,
+       runtime_entries: Vec::new(),
         protocol_version: PROTOCOL_VERSION,
         operation: OPERATION,
         root: canonical_root.to_string_lossy().into_owned(),
@@ -1448,8 +1459,10 @@ fn validate_reference_coverage(
     if response.reference_scope.fingerprint.as_ref() != fingerprint
         || response.reference_scope.source_count != source_count
         || response.reference_scope.candidate_count != candidate_count
+        || response.reference_scope.entry_count != request.runtime_entries.len()
+        || response.reference_scope.entry_digest != runtime_entry_digest(&request.runtime_entries)?
         || (matches!(request.reference_scope, ReferenceScope::Graph { .. })
-            && (source_count > 0 || candidate_count > 0)
+            && (source_count > 0 || candidate_count > 0 || !request.runtime_entries.is_empty())
             && response.reference_scope.owning_projects.is_empty())
     {
         return Err(TypeAwareError::from(
@@ -1457,6 +1470,32 @@ fn validate_reference_coverage(
         ));
     }
     Ok(())
+}
+
+fn runtime_entry_digest(entries: &[SemanticRuntimeEntry]) -> Result<String, TypeAwareError> {
+    let mut identities = entries.iter().map(|entry| {
+        let symbol = &entry.symbol;
+        serde_json::to_string(&serde_json::json!([
+            symbol.path.to_string_lossy().replace('\\', "/"), symbol.namespace,
+            symbol.declaration_kind, symbol.exported_name, symbol.local_name,
+            symbol.owner, symbol.line, symbol.col, entry.origin,
+        ]))
+    }).collect::<Result<Vec<_>, _>>().map_err(|error| TypeAwareError::from(error.to_string()))?;
+    identities.sort();
+    identities.dedup();
+    let bytes = serde_json::to_vec(&identities).map_err(|error| TypeAwareError::from(error.to_string()))?;
+    Ok(digest_hex(Sha256::digest(bytes)))
+}
+
+fn protocol_runtime_entries(root: &Path, entries: &[SemanticRuntimeEntry]) -> Result<Vec<SemanticRuntimeEntry>, TypeAwareError> {
+    let mut entries = entries.iter().map(|entry| {
+        let mut entry = entry.clone();
+        entry.symbol.path = protocol_path(root, &entry.symbol.path)?;
+        Ok(entry)
+    }).collect::<Result<Vec<_>, TypeAwareError>>()?;
+    entries.sort();
+    entries.dedup();
+    Ok(entries)
 }
 
 fn validate_response(
@@ -1546,6 +1585,7 @@ fn decode_candidate_decision(
     result: &SemanticQueryResponse,
     fix_supported: bool,
     source_cache: &mut FxHashMap<PathBuf, Vec<u8>>,
+    runtime_entries: &std::collections::BTreeSet<&SemanticRuntimeEntry>,
 ) -> Result<SemanticCandidateDecision, TypeAwareError> {
     let SemanticQuery::SymbolUse {
         symbol: requested,
@@ -1570,6 +1610,7 @@ fn decode_candidate_decision(
             root,
             requested,
             requested_framework_contracts: framework_contracts,
+            requested_runtime_entries: runtime_entries,
             result,
             fix_supported,
         },
@@ -1585,7 +1626,7 @@ fn decode_candidate_decision(
     let framework_contract = data.framework_contract_relations.first().cloned();
     let (expected_assertion, decision) = expected_candidate_decision(
         &data,
-        required_contract.is_some() || framework_contract.is_some(),
+        required_contract.is_some() || framework_contract.is_some() || !data.runtime_contracts.is_empty(),
         result.reason_code,
     );
     if result.assertion != expected_assertion {
@@ -1624,6 +1665,9 @@ fn decode_candidate_decision(
         evidence,
         contract,
         framework_contract,
+        runtime_contracts: data.runtime_contracts,
+        reference_complete: data.reference_complete,
+        edit_reasons: data.edit_reasons,
         closed_world_eligible,
         edit_guard: closed_world_eligible.then_some(data.edit_guard),
         reason_code: result.reason_code,
@@ -1661,6 +1705,9 @@ fn unavailable_candidate_decision(
         contract: None,
         framework_contract: None,
         closed_world_eligible: false,
+        runtime_contracts: Vec::new(),
+        reference_complete: false,
+        edit_reasons: Vec::new(),
         edit_guard: None,
         reason_code: result.reason_code,
         explanation,
@@ -1676,6 +1723,7 @@ struct SymbolUseValidation<'a> {
     root: &'a Path,
     requested: &'a SemanticSymbol,
     requested_framework_contracts: &'a [SemanticFrameworkContract],
+    requested_runtime_entries: &'a std::collections::BTreeSet<&'a SemanticRuntimeEntry>,
     result: &'a SemanticQueryResponse,
     fix_supported: bool,
 }
@@ -1689,6 +1737,7 @@ fn validate_symbol_use_data(
         root,
         requested,
         requested_framework_contracts,
+        requested_runtime_entries,
         result,
         fix_supported,
     } = validation;
@@ -1731,11 +1780,26 @@ fn validate_symbol_use_data(
             || !result.omissions.is_empty()
             || data.total_reference_count != 0
             || !data.contract_relations.is_empty()
-            || !data.framework_contract_relations.is_empty())
+            || !data.framework_contract_relations.is_empty()
+            || !data.runtime_contracts.is_empty()
+            || !data.reference_complete
+            || !data.edit_reasons.is_empty())
     {
         return Err(TypeAwareError::from(format!(
             "type-aware query {} claimed unsafe closed-world eligibility",
             result.query_id
+        )));
+    }
+    if data.reference_complete && result.omissions.iter().any(|omission| {
+        omission.count > 0 && omission.reason_code != SemanticGapReason::EvidenceLimit
+    }) {
+        return Err(TypeAwareError::from(format!(
+            "type-aware query {} claimed complete references with runtime omissions", result.query_id
+        )));
+    }
+    if data.runtime_contracts.iter().any(|entry| !requested_runtime_entries.contains(entry)) {
+        return Err(TypeAwareError::from(format!(
+            "type-aware query {} returned an unrequested native runtime contract", result.query_id
         )));
     }
     if data.framework_contract_relations.len() > 1
@@ -1944,7 +2008,7 @@ fn expected_candidate_decision(
             SemanticCandidateDecisionKind::ContractPreserved,
         );
     }
-    if data.closed_world_eligible {
+    if data.reference_complete {
         return (
             "confirmed-no-static-references",
             SemanticCandidateDecisionKind::ConfirmedNoStaticReferences,
@@ -2566,10 +2630,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn runtime_entry_digest_and_coverage_bind_the_exact_native_set() {
+        use fallow_types::semantic::SemanticRuntimeOrigin;
+        let entry = SemanticRuntimeEntry {
+            symbol: SemanticSymbol {
+                path: PathBuf::from("src/config.ts"), namespace: SemanticNamespace::Value,
+                declaration_kind: "class_method".to_string(), exported_name: "run".to_string(),
+                local_name: "run".to_string(), owner: Some("Worker".to_string()), line: 2, col: 2,
+            }, origin: SemanticRuntimeOrigin::ExplicitMember,
+        };
+        assert_eq!(runtime_entry_digest(std::slice::from_ref(&entry)).unwrap(),
+            "8c57d04e39dfa197a7a35e781723bcd20b0767ddb4906c22fd2b29e24a34f7a9");
+        let mut request = request_with_all_operations(Path::new("/project"));
+        request.runtime_entries = vec![entry];
+        let response = complete_response(&request);
+        assert!(validate_reference_coverage(&request, &response).is_ok());
+        let mut missing = response;
+        missing.reference_scope.entry_count = 0;
+        assert!(validate_reference_coverage(&request, &missing).is_err());
+        missing.reference_scope.entry_count = 1;
+        request.runtime_entries[0].origin = SemanticRuntimeOrigin::PublicApi;
+        assert!(validate_reference_coverage(&request, &missing).is_err());
+    }
+
+    #[test]
+    fn edit_constraints_do_not_hide_complete_negative_candidates() {
+        let data = SymbolUseData {
+            symbol: symbol(), selected_project: "tsconfig.json".to_string(),
+            owning_projects: vec!["tsconfig.json".to_string()], total_reference_count: 0,
+            contract_relations: Vec::new(), framework_contract_relations: Vec::new(),
+            runtime_contracts: Vec::new(), reference_complete: true,
+            edit_reasons: vec![SemanticEditReason::AttachedComment], closed_world_eligible: false,
+            edit_guard: SemanticEditGuard { start: 0, end: 1, declaration_sha256: "unused".to_string() },
+        };
+        let (assertion, decision) = expected_candidate_decision(&data, false, None);
+        assert_eq!(assertion, "confirmed-no-static-references");
+        assert_eq!(decision, SemanticCandidateDecisionKind::ConfirmedNoStaticReferences);
+        assert!(!semantic_only_candidate_stays_hidden(true, decision));
+        assert!(!data.closed_world_eligible);
+    }
+
     fn request_with_all_operations(root: &Path) -> SemanticRequest {
         let symbol = symbol();
         SemanticRequest {
             reference_scope: ReferenceScope::CompilerProgram,
+            runtime_entries: Vec::new(),
             protocol_version: PROTOCOL_VERSION,
             operation: OPERATION,
             root: root.to_string_lossy().into_owned(),
@@ -2647,6 +2753,8 @@ mod tests {
     fn complete_response(request: &SemanticRequest) -> SemanticResponse {
         SemanticResponse {
             reference_scope: SemanticReferenceCoverage {
+                entry_count: request.runtime_entries.len(),
+                entry_digest: runtime_entry_digest(&request.runtime_entries).expect("entry digest"),
                 fingerprint: match &request.reference_scope {
                     ReferenceScope::Graph { fingerprint, .. } => Some(fingerprint.clone()),
                     ReferenceScope::CompilerProgram => None,
@@ -2797,6 +2905,7 @@ mod tests {
             .expect("semantic query batch");
         let request = SemanticRequest {
             reference_scope: ReferenceScope::CompilerProgram,
+            runtime_entries: Vec::new(),
             protocol_version: PROTOCOL_VERSION,
             operation: OPERATION,
             root: root.to_string_lossy().into_owned(),
@@ -2826,6 +2935,9 @@ mod tests {
             "total_reference_count": 1,
             "contract_relations": [],
             "framework_contract_relations": [],
+            "runtime_contracts": [],
+            "reference_complete": true,
+            "edit_reasons": [],
             "closed_world_eligible": false,
             "edit_guard": {
                 "start": 0,
@@ -2957,6 +3069,7 @@ mod tests {
         .expect("mixed semantic query batch");
         let request = SemanticRequest {
             reference_scope: ReferenceScope::CompilerProgram,
+            runtime_entries: Vec::new(),
             protocol_version: PROTOCOL_VERSION,
             operation: OPERATION,
             root: root.to_string_lossy().into_owned(),
@@ -3915,6 +4028,7 @@ mod tests {
         let target = symbol();
         let request = SemanticRequest {
             reference_scope: ReferenceScope::CompilerProgram,
+            runtime_entries: Vec::new(),
             protocol_version: PROTOCOL_VERSION,
             operation: OPERATION,
             root: ".".to_string(),
@@ -3965,6 +4079,8 @@ mod tests {
                 fingerprint: None,
                 source_count: 0,
                 candidate_count: 1,
+                entry_count: request.runtime_entries.len(),
+                entry_digest: runtime_entry_digest(&request.runtime_entries).expect("entry digest"),
                 owning_projects: vec!["tsconfig.json".to_string()],
             },
             protocol_version: PROTOCOL_VERSION,
@@ -4013,6 +4129,9 @@ mod tests {
     #[test]
     fn candidate_policy_removes_contracts_and_retains_only_fixable_negative_evidence() {
         let decision = |kind, fixable| SemanticCandidateDecision {
+            runtime_contracts: Vec::new(),
+            reference_complete: true,
+            edit_reasons: Vec::new(),
             query_id: 0,
             subject: symbol(),
             decision: kind,
@@ -4059,6 +4178,9 @@ mod tests {
     #[test]
     fn svelte_virtual_module_gaps_have_a_dedicated_abstention_count() {
         let decision = SemanticCandidateDecision {
+            runtime_contracts: Vec::new(),
+            reference_complete: false,
+            edit_reasons: Vec::new(),
             query_id: 0,
             subject: symbol(),
             decision: SemanticCandidateDecisionKind::RetainedUnresolved,
@@ -4257,6 +4379,9 @@ mod tests {
             owning_projects: vec!["tsconfig.json".to_string()],
             total_reference_count: 0,
             contract_relations: Vec::new(),
+            runtime_contracts: Vec::new(),
+            reference_complete: true,
+            edit_reasons: Vec::new(),
             framework_contract_relations: vec![SemanticFrameworkContractEvidence {
                 framework: "lit".to_string(),
                 package: "lit".to_string(),
@@ -4291,6 +4416,7 @@ mod tests {
                 root: Path::new("."),
                 requested: &requested_symbol,
                 requested_framework_contracts: &requested_contracts,
+                requested_runtime_entries: &std::collections::BTreeSet::new(),
                 result: &result,
                 fix_supported: false,
             },

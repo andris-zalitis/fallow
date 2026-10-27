@@ -69,6 +69,10 @@ pub struct SemanticReferenceCoverage {
     pub source_count: usize,
     /// Number of symbol candidates resolved in this batch.
     pub candidate_count: usize,
+    /// Number of exact native runtime entries resolved in this batch.
+    pub entry_count: usize,
+    /// SHA-256 of the canonical requested runtime-entry set.
+    pub entry_digest: String,
     /// Complete configured/inferred projects owning the analyzed sources/candidates.
     pub owning_projects: Vec<String>,
 }
@@ -205,7 +209,7 @@ impl SemanticAnalysisIdentity {
 }
 
 /// Value or type namespace for one exact declaration or reference.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum SemanticNamespace {
@@ -217,7 +221,7 @@ pub enum SemanticNamespace {
 }
 
 /// Stable identity for a declaration sent to or returned by the backend.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SemanticSymbol {
     /// Project-root-relative declaration path.
@@ -238,6 +242,55 @@ pub struct SemanticSymbol {
     pub line: u32,
     /// Zero-based UTF-8 byte column.
     pub col: u32,
+}
+
+/// Native exposure or runtime contract for an exact source declaration.
+///
+/// Public exports carry exposure; the compiler resolves their callable bodies.
+/// Noncallable values do not manufacture an activation. Entries are independent
+/// of finding suppression and the unused-candidate list.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SemanticRuntimeEntry {
+    /// Exact declaration identity, in the same coordinates as a candidate.
+    pub symbol: SemanticSymbol,
+    /// Native owner which established the exposure or contract.
+    pub origin: SemanticRuntimeOrigin,
+}
+
+/// Native contract provenance, distinct from checker-validated frameworks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum SemanticRuntimeOrigin {
+    /// An exact package-public export or member.
+    PublicApi,
+    /// A member explicitly preserved by the configured member rules.
+    ExplicitMember,
+    /// A native custom-element lifecycle member.
+    CustomElementLifecycle,
+    /// A member consumed by the native Error runtime contract.
+    ErrorRuntime,
+    /// An OpenLayers interaction member dispatched by its native contract.
+    OpenlayersInteraction,
+}
+
+/// Declaration edit constraints which do not omit runtime references.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum SemanticEditReason {
+    /// An optional inherited or interface declaration needs human review.
+    OptionalContract,
+    /// Accessors must be edited together.
+    AccessorPair,
+    /// An overload group must be edited together.
+    OverloadSet,
+    /// Attached source comments need human review.
+    AttachedComment,
+    /// The declaration defines an abstract contract.
+    AbstractDeclaration,
 }
 
 /// One project-root-relative source location used as semantic evidence.
@@ -435,6 +488,14 @@ pub struct SemanticCandidateDecision {
     /// Framework-owned contract evidence, distinct from TypeScript contracts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub framework_contract: Option<SemanticFrameworkContractEvidence>,
+    /// Exact native contracts, independent of source-reference evidence.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_contracts: Vec<SemanticRuntimeEntry>,
+    /// Whether exact reference analysis completed independently of edit safety.
+    pub reference_complete: bool,
+    /// Declaration constraints withholding a guarded source edit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edit_reasons: Vec<SemanticEditReason>,
     /// Whether this exact decision may enable a guarded class-member fix.
     pub closed_world_eligible: bool,
     /// Exact declaration guard required before a source edit.

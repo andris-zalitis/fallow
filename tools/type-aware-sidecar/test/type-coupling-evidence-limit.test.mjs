@@ -22,6 +22,7 @@ const write = (root, relativePath, contents) => {
 
 const semanticRequest = (root, queries) => ({
   protocol_version: WIRE_PROTOCOL_VERSION,
+  runtime_entries: [],
   reference_scope: { kind: "compiler-program" },
   operation: ANALYSIS_OPERATION,
   root,

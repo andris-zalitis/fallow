@@ -4825,6 +4825,9 @@ mod mutation_gate {
         };
 
         let complete_negative = || SemanticCandidateDecision {
+            runtime_contracts: Vec::new(),
+            reference_complete: true,
+            edit_reasons: Vec::new(),
             query_id: 0,
             subject: SemanticSymbol {
                 path: PathBuf::from("/p/src/mod.ts"),
@@ -4882,6 +4885,9 @@ mod mutation_gate {
         };
 
         let eligible = || SemanticCandidateDecision {
+            runtime_contracts: Vec::new(),
+            reference_complete: true,
+            edit_reasons: Vec::new(),
             query_id: 0,
             subject: SemanticSymbol {
                 path: PathBuf::from("/p/src/mod.ts"),
