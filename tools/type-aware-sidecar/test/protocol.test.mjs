@@ -76,12 +76,36 @@ test("unbounded class queries preserve validation and independent operation budg
     () => parseRequest(request(Array.from({ length: 25_001 }, (_, id) => symbolQuery(id, "export")))),
     /25000 item limit/,
   );
-  const traces = classes.map((query) => ({ ...query, operation: "symbol-trace" }));
-  assert.throws(() => parseRequest(request(traces)), /25000 item limit/);
-  const graphs = Array.from({ length: 257 }, (_, index) => ({
-    id: index + classes.length,
-    operation: "api-surface",
-    entry_points: [],
+  for (const operation of ["symbol-trace", "symbol-impact"]) {
+    const queries = classes.map((query) => ({ ...query, operation }));
+    assert.throws(() => parseRequest(request(queries)), /25000 item limit/);
+  }
+  for (const operation of ["api-surface", "type-coupling"]) {
+    const graphs = Array.from({ length: 257 }, (_, index) => ({
+      id: index + classes.length,
+      operation,
+      entry_points: [],
+    }));
+    assert.throws(
+      () => parseRequest(request([...classes, ...graphs])),
+      /graph queries exceed the 256 item limit/,
+    );
+  }
+  const privateLeakCandidates = Array.from({ length: 25_001 }, (_, id) => ({
+    id,
+    path: "src/service.ts",
+    export_name: "Service",
+    type_name: `Private${id}`,
   }));
-  assert.throws(() => parseRequest(request([...classes, ...graphs])), /graph queries exceed the 256 item limit/);
+  assert.throws(
+    () => parseRequest(request([
+      ...classes,
+      {
+        id: classes.length,
+        operation: "api-surface",
+        private_leak_candidates: privateLeakCandidates,
+      },
+    ])),
+    /private_leak_candidates exceeds the 25000 item limit/,
+  );
 });

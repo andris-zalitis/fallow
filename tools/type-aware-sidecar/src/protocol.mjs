@@ -70,13 +70,12 @@ const SYMBOL_NAMESPACES = new Set(["value", "type"]);
 const MAX_WARNINGS = 20;
 const MAX_WARNING_CHARS = 512;
 const MAX_PROJECTS = 256;
-const MAX_QUERIES = 25_000;
+const MAX_NONCLASS_QUERIES = 25_000;
 const MAX_GRAPH_QUERIES = 256;
 const MAX_PRIVATE_LEAK_CANDIDATES = 25_000;
 const MAX_EVIDENCE_PER_RESULT = 40;
 // A type-coupling result is one project-wide report, so it can carry more
-// evidence than a per-symbol result. This bound keeps the response well below
-// the native client's semantic response byte limit.
+// evidence than a per-symbol result.
 const MAX_TYPE_COUPLING_EVIDENCE = 10_000;
 const MAX_STRING_CHARS = 4_096;
 
@@ -362,7 +361,16 @@ const parseProjects = (value, root) => {
   return projects;
 };
 
-const validateGraphQueryCount = (queries) => {
+const validateQueryCounts = (queries) => {
+  const nonclassCount = queries.filter(
+    (query) =>
+      query.operation !== "symbol-use" ||
+      (query.symbol.declarationKind !== "class_method" &&
+        query.symbol.declarationKind !== "class_property"),
+  ).length;
+  if (nonclassCount > MAX_NONCLASS_QUERIES) {
+    throw new Error(`queries exceeds the ${MAX_NONCLASS_QUERIES} item limit`);
+  }
   const count = queries.filter(
     (query) => query.operation === "api-surface" || query.operation === "type-coupling",
   ).length;
@@ -435,11 +443,11 @@ const parseBatchRequest = (value) => {
   requireLiteral(value.operation, ANALYSIS_OPERATION, "operation");
   const root = parseRoot(value.root);
   const projects = parseProjects(value.projects, root);
-  const queries = requireBoundedArray(value.queries, "queries", MAX_QUERIES).map((query, index) =>
+  const queries = requireArray(value.queries, "queries").map((query, index) =>
     parseQuery(query, index, root),
   );
-  validateGraphQueryCount(queries);
   requireUniqueCandidateIds(queries);
+  validateQueryCounts(queries);
   const evidenceLimit = parseEvidenceLimit(value.evidence_limit);
   return {
     root,
