@@ -32,7 +32,8 @@ use discovery::{canonicalize_root, discover_type_aware_sidecar, non_empty_env};
 #[cfg(all(test, windows))]
 use process::sidecar_command_with_script;
 use process::{
-    SidecarIoPolicy, SidecarTimeout, join_sidecar_worker, read_stream, run_sidecar_json, sidecar_command,
+    SidecarIoPolicy, SidecarTimeout, join_sidecar_worker, read_stream, run_sidecar_json,
+    sidecar_command,
 };
 #[cfg(test)]
 use process::{bounded_text, sanitize_search_path};

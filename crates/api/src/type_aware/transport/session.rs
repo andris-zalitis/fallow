@@ -89,7 +89,12 @@ impl TypeAwareSessionProcess {
         })?;
         let stderr_terminator = terminator.clone();
         let stderr_reader = std::thread::spawn(move || {
-            read_stream(stderr, Some(MAX_STDERR_BYTES), "stderr", Some(stderr_terminator))
+            read_stream(
+                stderr,
+                Some(MAX_STDERR_BYTES),
+                "stderr",
+                Some(stderr_terminator),
+            )
         });
         Ok(Self {
             _child: child,
@@ -234,12 +239,11 @@ impl TypeAwareSession {
         let mut response_bytes = Vec::new();
         let read_result = process.stdout.read_until(b'\n', &mut response_bytes);
         timeout.finish().map_err(TypeAwareError)?;
-        read_result
-            .map_err(|error| {
-                TypeAwareError::from(format!(
-                    "failed to read persistent type-aware response: {error}"
-                ))
-            })?;
+        read_result.map_err(|error| {
+            TypeAwareError::from(format!(
+                "failed to read persistent type-aware response: {error}"
+            ))
+        })?;
         if response_bytes.is_empty() {
             return Err(TypeAwareError::from(
                 "persistent type-aware sidecar closed without a response".to_string(),
