@@ -116,7 +116,7 @@ fn type_aware_project_for_test() -> (
         ),
         (
             "src/library.ts",
-            "export const used = 1;\n/** Review this declaration before editing. */\nexport const unused = 2;\n",
+            "export const used = 1;\n/** Review this declaration before editing. */\nexport function unused() { return 2; }\n",
         ),
     ] {
         std::fs::write(root.join(name), contents).expect("project input");
