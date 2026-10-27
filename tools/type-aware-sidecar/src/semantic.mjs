@@ -2110,18 +2110,25 @@ const resolveRuntimeEntries = (context, runtimeEntries, resolvedByQuery) => {
   const byDeclaration = new Map();
   runtimeEntries.forEach((entry, index) => {
     const resolved = resolveSymbolQuery(
-      context.root, context.snapshot, context.explicitProjects, context.statesByProject,
-      { symbol: entry.symbol, frameworkContracts: [] }, context.allowDefaultFallback,
+      context.root,
+      context.snapshot,
+      context.explicitProjects,
+      context.statesByProject,
+      { symbol: entry.symbol, frameworkContracts: [] },
+      context.allowDefaultFallback,
     );
     if (resolved.error || resolved.omissions.some(({ count }) => count > 0)) {
-      throw new Error(`runtime entry ${index} (${entry.symbol.path}:${entry.symbol.line}) has no complete exact declaration ownership`);
+      throw new Error(
+        `runtime entry ${index} (${entry.symbol.path}:${entry.symbol.line}) has no complete exact declaration ownership`,
+      );
     }
     const key = resolvedIdentityKey(resolved);
     if (!byDeclaration.has(key)) byDeclaration.set(key, []);
     byDeclaration.get(key).push(runtimeEntryWire(entry));
   });
   for (const resolved of resolvedByQuery.values()) {
-    if (!resolved.error) resolved.runtimeContracts = byDeclaration.get(resolvedIdentityKey(resolved)) ?? [];
+    if (!resolved.error)
+      resolved.runtimeContracts = byDeclaration.get(resolvedIdentityKey(resolved)) ?? [];
   }
 };
 
@@ -2147,7 +2154,15 @@ const semanticProjectSelection = (snapshot, openProjects, openFiles, allowDefaul
   return { explicitProjects, selectedProjects };
 };
 
-const semanticSetup = (root, projects, queries, runtimeEntries, referenceScope, api, sessionState) => {
+const semanticSetup = (
+  root,
+  projects,
+  queries,
+  runtimeEntries,
+  referenceScope,
+  api,
+  sessionState,
+) => {
   const openFiles = [
     ...new Set([
       ...semanticOpenFiles(queries),
@@ -2253,7 +2268,14 @@ const executeSemanticAnalysis = ({
       throw new Error("native reference scope has no owning compiler projects");
     return {
       ...emptySemanticAnalysis(queries),
-      referenceScopeCoverage: attestReferenceScope(root, referenceScope, queries, [], new Map(), runtimeEntries),
+      referenceScopeCoverage: attestReferenceScope(
+        root,
+        referenceScope,
+        queries,
+        [],
+        new Map(),
+        runtimeEntries,
+      ),
     };
   }
   const projectSetupMs = performance.now() - setupStartedAt;
@@ -2271,10 +2293,17 @@ const executeSemanticAnalysis = ({
     queries,
     allowDefaultFallback: setup.allowDefaultFallback,
   });
-  resolveRuntimeEntries({
-    root, snapshot: setup.snapshot, explicitProjects: setup.explicitProjects,
-    statesByProject, allowDefaultFallback: setup.allowDefaultFallback,
-  }, runtimeEntries, resolvedByQuery);
+  resolveRuntimeEntries(
+    {
+      root,
+      snapshot: setup.snapshot,
+      explicitProjects: setup.explicitProjects,
+      statesByProject,
+      allowDefaultFallback: setup.allowDefaultFallback,
+    },
+    runtimeEntries,
+    resolvedByQuery,
+  );
   const semanticProjects = states
     .filter((state) => state.status === "complete")
     .map((state) => state.project);
@@ -2333,10 +2362,21 @@ export const analyzeSemanticQueries = (
   { root, projects, queries, runtimeEntries, evidenceLimit, referenceScope },
   { createApi = (cwd) => new API({ cwd, tsserverPath: getSelectedBackend().path }) } = {},
 ) => {
-  if (queries.length === 0 && runtimeEntries.length === 0 && referenceScope.kind === "compiler-program")
+  if (
+    queries.length === 0 &&
+    runtimeEntries.length === 0 &&
+    referenceScope.kind === "compiler-program"
+  )
     return {
       ...emptyRequestedAnalysis(),
-      referenceScopeCoverage: attestReferenceScope(root, referenceScope, queries, [], new Map(), runtimeEntries),
+      referenceScopeCoverage: attestReferenceScope(
+        root,
+        referenceScope,
+        queries,
+        [],
+        new Map(),
+        runtimeEntries,
+      ),
     };
   const setupStartedAt = performance.now();
   const api = createApi(root);

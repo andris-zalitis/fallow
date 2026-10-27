@@ -14,17 +14,18 @@ export const runtimeEntryWire = ({ symbol, origin }) => ({
   origin,
 });
 
-export const runtimeEntryKey = ({ symbol, origin }) => JSON.stringify([
-  symbol.path,
-  symbol.namespace,
-  symbol.declarationKind,
-  symbol.exportedName,
-  symbol.localName,
-  symbol.owner,
-  symbol.line,
-  symbol.col,
-  origin,
-]);
+export const runtimeEntryKey = ({ symbol, origin }) =>
+  JSON.stringify([
+    symbol.path,
+    symbol.namespace,
+    symbol.declarationKind,
+    symbol.exportedName,
+    symbol.localName,
+    symbol.owner,
+    symbol.line,
+    symbol.col,
+    origin,
+  ]);
 
 export const runtimeEntryDigest = (entries) => {
   const identities = [...new Set(entries.map(runtimeEntryKey))].toSorted((left, right) =>

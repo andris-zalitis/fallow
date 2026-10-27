@@ -943,7 +943,9 @@ impl MemberReportContext<'_, '_> {
             && self.prepared.public_exports.contains(&export_key)
         {
             let (line, col) = byte_offset_to_line_col(
-                self.input.line_offsets_by_file, module.file_id, export.span.start,
+                self.input.line_offsets_by_file,
+                module.file_id,
+                export.span.start,
             );
             buckets.3.push(SemanticRuntimeEntry {
                 symbol: SemanticSymbol {
@@ -1054,7 +1056,9 @@ impl MemberReportContext<'_, '_> {
             && let Some(origin) = native_member_runtime_contract(member, skip_context)
         {
             let (line, col) = byte_offset_to_line_col(
-                self.input.line_offsets_by_file, target.module.file_id, member.span.start,
+                self.input.line_offsets_by_file,
+                target.module.file_id,
+                member.span.start,
             );
             buckets.3.push(SemanticRuntimeEntry {
                 symbol: SemanticSymbol {
@@ -1064,7 +1068,8 @@ impl MemberReportContext<'_, '_> {
                         MemberKind::ClassMethod => "class_method",
                         MemberKind::ClassProperty => "class_property",
                         _ => unreachable!(),
-                    }.to_string(),
+                    }
+                    .to_string(),
                     exported_name: member.name.clone(),
                     local_name: member.name.clone(),
                     owner: Some(target.export_name.to_string()),
@@ -1639,9 +1644,9 @@ fn class_member_runtime_credit_applies(member: &MemberInfo, ctx: &MemberSkipCont
     );
     native_member_runtime_contract(member, ctx).is_some()
         || (is_class_member_kind(member.kind)
-        && ((is_react_lifecycle_method(&member.name)
-            || is_angular_lifecycle_method(&member.name))
-            && !semantic_framework_candidate))
+            && ((is_react_lifecycle_method(&member.name)
+                || is_angular_lifecycle_method(&member.name))
+                && !semantic_framework_candidate))
 }
 
 /// The native preservation owner supplies contract provenance to both modes.
@@ -1656,7 +1661,11 @@ fn native_member_runtime_contract(
     if ctx.is_public_api_class_export {
         return Some(SemanticRuntimeOrigin::PublicApi);
     }
-    if ctx.allowlist.matches(member.name.as_str(), ctx.super_class, ctx.implemented_interfaces) {
+    if ctx.allowlist.matches(
+        member.name.as_str(),
+        ctx.super_class,
+        ctx.implemented_interfaces,
+    ) {
         return Some(SemanticRuntimeOrigin::ExplicitMember);
     }
     if is_native_custom_element_lifecycle_method(&member.name, ctx.super_class) {
@@ -1665,7 +1674,11 @@ fn native_member_runtime_contract(
     if is_error_subclass_runtime_member(&member.name, ctx.export_key, ctx.error_subclass_keys) {
         return Some(SemanticRuntimeOrigin::ErrorRuntime);
     }
-    if is_ol_interaction_dispatched_member(&member.name, ctx.export_key, ctx.ol_interaction_subclass_keys) {
+    if is_ol_interaction_dispatched_member(
+        &member.name,
+        ctx.export_key,
+        ctx.ol_interaction_subclass_keys,
+    ) {
         return Some(SemanticRuntimeOrigin::OpenlayersInteraction);
     }
     None

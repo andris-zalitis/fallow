@@ -34,7 +34,11 @@ const BATCH_REQUEST_KEYS = new Set([
 ]);
 const RUNTIME_ENTRY_KEYS = new Set(["symbol", "origin"]);
 const RUNTIME_ENTRY_ORIGINS = new Set([
-  "public-api", "explicit-member", "custom-element-lifecycle", "error-runtime", "openlayers-interaction",
+  "public-api",
+  "explicit-member",
+  "custom-element-lifecycle",
+  "error-runtime",
+  "openlayers-interaction",
 ]);
 const SYMBOL_QUERY_KEYS = new Set(["id", "operation", "symbol"]);
 const SYMBOL_USE_QUERY_KEYS = new Set(["id", "operation", "symbol", "framework_contracts"]);
@@ -212,7 +216,8 @@ const parseRuntimeEntries = (value, root) => {
     const origin = requireString(entry.origin, `${field}.origin`);
     if (!RUNTIME_ENTRY_ORIGINS.has(origin)) throw new Error(`${field}.origin is unsupported`);
     const symbol = parseSymbolIdentity(entry.symbol, `${field}.symbol`, root);
-    if (symbol.namespace !== "value") throw new Error(`${field}.symbol must use the value namespace`);
+    if (symbol.namespace !== "value")
+      throw new Error(`${field}.symbol must use the value namespace`);
     if (!["export", "class_method", "class_property"].includes(symbol.declarationKind)) {
       throw new Error(`${field}.symbol must be an export or class member`);
     }

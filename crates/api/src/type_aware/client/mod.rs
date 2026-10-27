@@ -24,7 +24,9 @@ use fallow_types::semantic::{
     SemanticSourceLocation, SemanticSymbol, SemanticSymbolImpact, SemanticSymbolTrace,
     TypeCouplingCycle, TypeCouplingEdge, TypeCouplingFile, TypeCouplingReport, TypeCouplingSummary,
 };
-use fallow_types::semantic::{ReferenceScope, SemanticReferenceCoverage, SemanticRuntimeEntry, SemanticEditReason};
+use fallow_types::semantic::{
+    ReferenceScope, SemanticEditReason, SemanticReferenceCoverage, SemanticRuntimeEntry,
+};
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -956,7 +958,7 @@ pub fn inspect_symbol(
     })?;
     let request = SemanticRequest {
         reference_scope: ReferenceScope::CompilerProgram,
-       runtime_entries: Vec::new(),
+        runtime_entries: Vec::new(),
         protocol_version: PROTOCOL_VERSION,
         operation: OPERATION,
         root: canonical_root.to_string_lossy().into_owned(),
@@ -1329,7 +1331,7 @@ fn run_single_query(
     })?;
     let request = SemanticRequest {
         reference_scope: ReferenceScope::CompilerProgram,
-       runtime_entries: Vec::new(),
+        runtime_entries: Vec::new(),
         protocol_version: PROTOCOL_VERSION,
         operation: OPERATION,
         root: canonical_root.to_string_lossy().into_owned(),
@@ -1473,26 +1475,43 @@ fn validate_reference_coverage(
 }
 
 fn runtime_entry_digest(entries: &[SemanticRuntimeEntry]) -> Result<String, TypeAwareError> {
-    let mut identities = entries.iter().map(|entry| {
-        let symbol = &entry.symbol;
-        serde_json::to_string(&serde_json::json!([
-            symbol.path.to_string_lossy().replace('\\', "/"), symbol.namespace,
-            symbol.declaration_kind, symbol.exported_name, symbol.local_name,
-            symbol.owner, symbol.line, symbol.col, entry.origin,
-        ]))
-    }).collect::<Result<Vec<_>, _>>().map_err(|error| TypeAwareError::from(error.to_string()))?;
+    let mut identities = entries
+        .iter()
+        .map(|entry| {
+            let symbol = &entry.symbol;
+            serde_json::to_string(&serde_json::json!([
+                symbol.path.to_string_lossy().replace('\\', "/"),
+                symbol.namespace,
+                symbol.declaration_kind,
+                symbol.exported_name,
+                symbol.local_name,
+                symbol.owner,
+                symbol.line,
+                symbol.col,
+                entry.origin,
+            ]))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| TypeAwareError::from(error.to_string()))?;
     identities.sort();
     identities.dedup();
-    let bytes = serde_json::to_vec(&identities).map_err(|error| TypeAwareError::from(error.to_string()))?;
+    let bytes =
+        serde_json::to_vec(&identities).map_err(|error| TypeAwareError::from(error.to_string()))?;
     Ok(digest_hex(Sha256::digest(bytes)))
 }
 
-fn protocol_runtime_entries(root: &Path, entries: &[SemanticRuntimeEntry]) -> Result<Vec<SemanticRuntimeEntry>, TypeAwareError> {
-    let mut entries = entries.iter().map(|entry| {
-        let mut entry = entry.clone();
-        entry.symbol.path = protocol_path(root, &entry.symbol.path)?;
-        Ok(entry)
-    }).collect::<Result<Vec<_>, TypeAwareError>>()?;
+fn protocol_runtime_entries(
+    root: &Path,
+    entries: &[SemanticRuntimeEntry],
+) -> Result<Vec<SemanticRuntimeEntry>, TypeAwareError> {
+    let mut entries = entries
+        .iter()
+        .map(|entry| {
+            let mut entry = entry.clone();
+            entry.symbol.path = protocol_path(root, &entry.symbol.path)?;
+            Ok(entry)
+        })
+        .collect::<Result<Vec<_>, TypeAwareError>>()?;
     entries.sort();
     entries.dedup();
     Ok(entries)
@@ -1626,7 +1645,9 @@ fn decode_candidate_decision(
     let framework_contract = data.framework_contract_relations.first().cloned();
     let (expected_assertion, decision) = expected_candidate_decision(
         &data,
-        required_contract.is_some() || framework_contract.is_some() || !data.runtime_contracts.is_empty(),
+        required_contract.is_some()
+            || framework_contract.is_some()
+            || !data.runtime_contracts.is_empty(),
         result.reason_code,
     );
     if result.assertion != expected_assertion {
@@ -1789,11 +1810,14 @@ fn validate_symbol_use_data(
             result.query_id
         )));
     }
-    if data.reference_complete && result.omissions.iter().any(|omission| {
-        omission.count > 0 && omission.reason_code != SemanticGapReason::EvidenceLimit
-    }) {
+    if data.reference_complete
+        && result.omissions.iter().any(|omission| {
+            omission.count > 0 && omission.reason_code != SemanticGapReason::EvidenceLimit
+        })
+    {
         return Err(TypeAwareError::from(format!(
-            "type-aware query {} claimed complete references with runtime omissions", result.query_id
+            "type-aware query {} claimed complete references with runtime omissions",
+            result.query_id
         )));
     }
     validate_symbol_use_contracts(validation, data)?;
@@ -1819,9 +1843,14 @@ fn validate_symbol_use_contracts(
         result,
         ..
     } = validation;
-    if data.runtime_contracts.iter().any(|entry| !requested_runtime_entries.contains(entry)) {
+    if data
+        .runtime_contracts
+        .iter()
+        .any(|entry| !requested_runtime_entries.contains(entry))
+    {
         return Err(TypeAwareError::from(format!(
-            "type-aware query {} returned an unrequested native runtime contract", result.query_id
+            "type-aware query {} returned an unrequested native runtime contract",
+            result.query_id
         )));
     }
     if data.framework_contract_relations.len() > 1
@@ -2648,14 +2677,22 @@ mod tests {
         use fallow_types::semantic::SemanticRuntimeOrigin;
         let entry = SemanticRuntimeEntry {
             symbol: SemanticSymbol {
-                path: PathBuf::from("src/config.ts"), namespace: SemanticNamespace::Value,
-                declaration_kind: "class_method".to_string(), exported_name: "run".to_string(),
-                local_name: "run".to_string(), owner: Some("Worker".to_string()), line: 2, col: 2,
-            }, origin: SemanticRuntimeOrigin::ExplicitMember,
+                path: PathBuf::from("src/config.ts"),
+                namespace: SemanticNamespace::Value,
+                declaration_kind: "class_method".to_string(),
+                exported_name: "run".to_string(),
+                local_name: "run".to_string(),
+                owner: Some("Worker".to_string()),
+                line: 2,
+                col: 2,
+            },
+            origin: SemanticRuntimeOrigin::ExplicitMember,
         };
-        assert_eq!(runtime_entry_digest(std::slice::from_ref(&entry))
-            .expect("explicit runtime-entry fixture must serialize for its contract digest"),
-            "8c57d04e39dfa197a7a35e781723bcd20b0767ddb4906c22fd2b29e24a34f7a9");
+        assert_eq!(
+            runtime_entry_digest(std::slice::from_ref(&entry))
+                .expect("explicit runtime-entry fixture must serialize for its contract digest"),
+            "8c57d04e39dfa197a7a35e781723bcd20b0767ddb4906c22fd2b29e24a34f7a9"
+        );
         let mut request = request_with_all_operations(Path::new("/project"));
         request.runtime_entries = vec![entry];
         let response = complete_response(&request);
@@ -2671,16 +2708,28 @@ mod tests {
     #[test]
     fn edit_constraints_do_not_hide_complete_negative_candidates() {
         let data = SymbolUseData {
-            symbol: symbol(), selected_project: "tsconfig.json".to_string(),
-            owning_projects: vec!["tsconfig.json".to_string()], total_reference_count: 0,
-            contract_relations: Vec::new(), framework_contract_relations: Vec::new(),
-            runtime_contracts: Vec::new(), reference_complete: true,
-            edit_reasons: vec![SemanticEditReason::AttachedComment], closed_world_eligible: false,
-            edit_guard: SemanticEditGuard { start: 0, end: 1, declaration_sha256: "unused".to_string() },
+            symbol: symbol(),
+            selected_project: "tsconfig.json".to_string(),
+            owning_projects: vec!["tsconfig.json".to_string()],
+            total_reference_count: 0,
+            contract_relations: Vec::new(),
+            framework_contract_relations: Vec::new(),
+            runtime_contracts: Vec::new(),
+            reference_complete: true,
+            edit_reasons: vec![SemanticEditReason::AttachedComment],
+            closed_world_eligible: false,
+            edit_guard: SemanticEditGuard {
+                start: 0,
+                end: 1,
+                declaration_sha256: "unused".to_string(),
+            },
         };
         let (assertion, decision) = expected_candidate_decision(&data, false, None);
         assert_eq!(assertion, "confirmed-no-static-references");
-        assert_eq!(decision, SemanticCandidateDecisionKind::ConfirmedNoStaticReferences);
+        assert_eq!(
+            decision,
+            SemanticCandidateDecisionKind::ConfirmedNoStaticReferences
+        );
         assert!(!semantic_only_candidate_stays_hidden(true, decision));
         assert!(!data.closed_world_eligible);
     }

@@ -1580,7 +1580,8 @@ impl AnalysisResults {
         }
         self.react_component_intel
             .extend(parts.react_component_intel);
-        self.semantic_runtime_entries.extend(parts.semantic_runtime_entries);
+        self.semantic_runtime_entries
+            .extend(parts.semantic_runtime_entries);
         self.semantic_runtime_entries.sort();
         self.semantic_runtime_entries.dedup();
         for contract in parts.semantic_framework_contracts {
@@ -4591,10 +4592,16 @@ mod tests {
     fn merge_into_appends_counts_and_preserves_existing_optional_metadata() {
         let runtime_entry = crate::semantic::SemanticRuntimeEntry {
             symbol: crate::semantic::SemanticSymbol {
-                path: PathBuf::from("src/model.ts"), namespace: crate::semantic::SemanticNamespace::Value,
-                declaration_kind: "class_method".to_string(), exported_name: "run".to_string(),
-                local_name: "run".to_string(), owner: Some("Model".to_string()), line: 2, col: 2,
-            }, origin: crate::semantic::SemanticRuntimeOrigin::ExplicitMember,
+                path: PathBuf::from("src/model.ts"),
+                namespace: crate::semantic::SemanticNamespace::Value,
+                declaration_kind: "class_method".to_string(),
+                exported_name: "run".to_string(),
+                local_name: "run".to_string(),
+                owner: Some("Model".to_string()),
+                line: 2,
+                col: 2,
+            },
+            origin: crate::semantic::SemanticRuntimeOrigin::ExplicitMember,
         };
         let framework_contract = crate::semantic::SemanticFrameworkContract {
             framework: "lit".to_string(),
@@ -4633,9 +4640,13 @@ mod tests {
             }),
             render_fan_in: Some(RenderFanInMetric::default()),
             semantic_framework_contracts: vec![framework_contract],
-            semantic_runtime_entries: vec![runtime_entry.clone(), crate::semantic::SemanticRuntimeEntry {
-                origin: crate::semantic::SemanticRuntimeOrigin::PublicApi, ..runtime_entry
-            }],
+            semantic_runtime_entries: vec![
+                runtime_entry.clone(),
+                crate::semantic::SemanticRuntimeEntry {
+                    origin: crate::semantic::SemanticRuntimeOrigin::PublicApi,
+                    ..runtime_entry
+                },
+            ],
             ..AnalysisResults::default()
         };
 
@@ -4664,9 +4675,20 @@ mod tests {
         assert!(target.render_fan_in.is_some());
         assert_eq!(target.semantic_framework_contracts.len(), 1);
         assert_eq!(target.semantic_runtime_entries.len(), 2);
-        assert_eq!(target.semantic_runtime_entries[0].origin, crate::semantic::SemanticRuntimeOrigin::PublicApi);
-        assert_eq!(target.semantic_runtime_entries[1].origin, crate::semantic::SemanticRuntimeOrigin::ExplicitMember);
-        assert!(serde_json::to_value(&target).unwrap().get("semantic_runtime_entries").is_none());
+        assert_eq!(
+            target.semantic_runtime_entries[0].origin,
+            crate::semantic::SemanticRuntimeOrigin::PublicApi
+        );
+        assert_eq!(
+            target.semantic_runtime_entries[1].origin,
+            crate::semantic::SemanticRuntimeOrigin::ExplicitMember
+        );
+        assert!(
+            serde_json::to_value(&target)
+                .unwrap()
+                .get("semantic_runtime_entries")
+                .is_none()
+        );
     }
 
     fn test_unused_export(path: &str, export_name: &str, is_type_only: bool) -> UnusedExport {

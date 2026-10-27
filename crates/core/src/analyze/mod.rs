@@ -2605,7 +2605,9 @@ struct MemberDetectorInput<'a> {
 fn run_member_detectors(input: MemberDetectorInput<'_>) -> AnalysisResults {
     let mut results = AnalysisResults::default();
     let store_members_active = store_member_rule_is_active(input.config, input.declared_deps);
-    if member_rules_are_disabled(input.config, store_members_active) && !input.config.type_aware.enabled {
+    if member_rules_are_disabled(input.config, store_members_active)
+        && !input.config.type_aware.enabled
+    {
         return results;
     }
 

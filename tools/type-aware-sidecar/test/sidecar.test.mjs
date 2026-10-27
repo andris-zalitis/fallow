@@ -1949,8 +1949,13 @@ test("reference completeness is independent of declaration edit constraints", ()
         semanticRequest(root, [{ id: 44, operation: "symbol-use", symbol }]),
       );
       const result = response.results[0];
-      const runtimeGap = ["decorated-declaration", "dynamic-member-access"].includes(expected.reason);
-      assert.equal(result.assertion, runtimeGap ? "no-confirmed-use" : "confirmed-no-static-references");
+      const runtimeGap = ["decorated-declaration", "dynamic-member-access"].includes(
+        expected.reason,
+      );
+      assert.equal(
+        result.assertion,
+        runtimeGap ? "no-confirmed-use" : "confirmed-no-static-references",
+      );
       assert.equal(result.status, runtimeGap ? "partial" : "complete");
       assert.equal(result.data.reference_complete, !runtimeGap);
       if (runtimeGap) {
@@ -3206,7 +3211,11 @@ test("unknown external framework package provenance abstains", () => {
 test("native runtime entries preserve exact contracts without inventing references", () => {
   const root = makeProject();
   try {
-    write(root, "tsconfig.json", JSON.stringify({ compilerOptions: { strict: true }, include: ["src"] }));
+    write(
+      root,
+      "tsconfig.json",
+      JSON.stringify({ compilerOptions: { strict: true }, include: ["src"] }),
+    );
     const source = [
       "export class Worker { run(): void {} }",
       "export class Other { run(): void {} }",
@@ -3262,18 +3271,35 @@ test("native runtime entries preserve exact contracts without inventing referenc
     const entriesOnly = analyzeSemanticQueries({ ...request, queries: [] });
     assert.deepEqual(entriesOnly.results, []);
     assert.equal(entriesOnly.referenceScopeCoverage.entry_count, 3);
-    assert.equal(entriesOnly.referenceScopeCoverage.entry_digest, response.referenceScopeCoverage.entry_digest);
+    assert.equal(
+      entriesOnly.referenceScopeCoverage.entry_digest,
+      response.referenceScopeCoverage.entry_digest,
+    );
     const session = createSemanticSession(root);
     try {
       const persistent = session.analyze(request, { revision: 1 });
       assert.deepEqual(persistent.results, response.results);
       assert.deepEqual(persistent.referenceScopeCoverage, response.referenceScopeCoverage);
-      assert.throws(() => session.analyze({
-        ...request,
-        runtimeEntries: [{ ...runtimeEntries[0], symbol: { ...runtimeEntries[0].symbol,
-          localName: "missing", exportedName: "missing",
-        } }],
-      }, { revision: 2 }), /runtime entry 0 .*no complete exact declaration ownership/u);
+      assert.throws(
+        () =>
+          session.analyze(
+            {
+              ...request,
+              runtimeEntries: [
+                {
+                  ...runtimeEntries[0],
+                  symbol: {
+                    ...runtimeEntries[0].symbol,
+                    localName: "missing",
+                    exportedName: "missing",
+                  },
+                },
+              ],
+            },
+            { revision: 2 },
+          ),
+        /runtime entry 0 .*no complete exact declaration ownership/u,
+      );
     } finally {
       session.close();
     }

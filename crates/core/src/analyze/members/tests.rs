@@ -431,12 +431,21 @@ fn semantic_candidates_respect_suppression_and_rule_severity() {
 fn runtime_entries_include_suppressed_public_members_and_non_candidate_exports() {
     use crate::suppress::{IssueKind, Suppression};
     let mut graph = build_graph(&[("/src/index.ts", true)]);
-    set_exports(&mut graph, 0, &[
-        make_export_with_members("Worker", vec![make_member("run", MemberKind::ClassMethod)], None),
-        make_export_with_members("publicRun", Vec::new(), None),
-    ]);
+    set_exports(
+        &mut graph,
+        0,
+        &[
+            make_export_with_members(
+                "Worker",
+                vec![make_member("run", MemberKind::ClassMethod)],
+                None,
+            ),
+            make_export_with_members("publicRun", Vec::new(), None),
+        ],
+    );
     let suppressions = [Suppression::issue(1, 0, IssueKind::UnusedClassMember)];
-    let suppressed = SuppressionContext::from_map(FxHashMap::from_iter([(FileId(0), suppressions.as_slice())]));
+    let suppressed =
+        SuppressionContext::from_map(FxHashMap::from_iter([(FileId(0), suppressions.as_slice())]));
     let results = find_unused_members_with_public_api_entry_points(UnusedMemberScanInput {
         graph: &graph,
         resolved_modules: &graph.resolved_modules,
@@ -452,25 +461,42 @@ fn runtime_entries_include_suppressed_public_members_and_non_candidate_exports()
     });
     assert!(results.class_members.is_empty());
     assert_eq!(results.runtime_entries.len(), 3);
-    assert_eq!(results.runtime_entries.iter().map(|entry| (
-        entry.symbol.exported_name.as_str(), entry.symbol.owner.as_deref(), entry.origin,
-    )).collect::<Vec<_>>(), vec![
-        ("run", Some("Worker"), SemanticRuntimeOrigin::PublicApi),
-        ("Worker", None, SemanticRuntimeOrigin::PublicApi),
-        ("publicRun", None, SemanticRuntimeOrigin::PublicApi),
-    ]);
+    assert_eq!(
+        results
+            .runtime_entries
+            .iter()
+            .map(|entry| (
+                entry.symbol.exported_name.as_str(),
+                entry.symbol.owner.as_deref(),
+                entry.origin,
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("run", Some("Worker"), SemanticRuntimeOrigin::PublicApi),
+            ("Worker", None, SemanticRuntimeOrigin::PublicApi),
+            ("publicRun", None, SemanticRuntimeOrigin::PublicApi),
+        ]
+    );
 }
 
 #[test]
 fn runtime_entries_survive_disabled_finding_rules_without_framework_spelling_credit() {
-    use fallow_config::Severity;
     use super::super::{MemberDetectorInput, run_member_detectors};
+    use fallow_config::Severity;
     let mut graph = build_graph(&[("/src/index.ts", true)]);
-    set_exports(&mut graph, 0, &[make_export_with_members("Worker", vec![
-        make_member("run", MemberKind::ClassMethod),
-        make_member("componentDidMount", MemberKind::ClassMethod),
-        make_member("ngOnInit", MemberKind::ClassMethod),
-    ], None)]);
+    set_exports(
+        &mut graph,
+        0,
+        &[make_export_with_members(
+            "Worker",
+            vec![
+                make_member("run", MemberKind::ClassMethod),
+                make_member("componentDidMount", MemberKind::ClassMethod),
+                make_member("ngOnInit", MemberKind::ClassMethod),
+            ],
+            None,
+        )],
+    );
     let mut config = member_test_config(true);
     config.rules.unused_class_members = Severity::Off;
     config.rules.unused_enum_members = Severity::Off;
@@ -489,8 +515,14 @@ fn runtime_entries_survive_disabled_finding_rules_without_framework_spelling_cre
     });
     assert!(results.unused_class_members.is_empty());
     assert_eq!(results.semantic_runtime_entries.len(), 1);
-    assert_eq!(results.semantic_runtime_entries[0].symbol.exported_name, "run");
-    assert_eq!(results.semantic_runtime_entries[0].origin, SemanticRuntimeOrigin::ExplicitMember);
+    assert_eq!(
+        results.semantic_runtime_entries[0].symbol.exported_name,
+        "run"
+    );
+    assert_eq!(
+        results.semantic_runtime_entries[0].origin,
+        SemanticRuntimeOrigin::ExplicitMember
+    );
 }
 
 fn native_lifecycle_member_scan(
@@ -503,16 +535,29 @@ fn native_lifecycle_member_scan(
     let mut graph = build_graph(&[("/src/index.ts", true), ("/src/worker.ts", false)]);
     graph.set_reachable(1);
     let worker_base = if inherited { "RuntimeBase" } else { base };
-    let mut worker = make_export_with_members("Worker", vec![
-        make_member(member, kind), make_member("unusedSibling", MemberKind::ClassMethod),
-    ], Some(0));
+    let mut worker = make_export_with_members(
+        "Worker",
+        vec![
+            make_member(member, kind),
+            make_member("unusedSibling", MemberKind::ClassMethod),
+        ],
+        Some(0),
+    );
     worker.info.local_name = Some("Worker".to_string());
     worker.info.super_class = Some(worker_base.to_string());
-    let mut exports = vec![worker, make_export_with_members("Other", vec![make_member(member, kind)], Some(0))];
+    let mut exports = vec![
+        worker,
+        make_export_with_members("Other", vec![make_member(member, kind)], Some(0)),
+    ];
     let mut module = make_module_with_class_heritage(1, "Worker", Some(worker_base), &[]);
     if inherited {
-        exports.push(TestExport { ref_from: Some(FileId(0)), info: make_export_info("RuntimeBase", Some(base)) });
-        module.class_heritage.extend(make_module_with_class_heritage(1, "RuntimeBase", Some(base), &[]).class_heritage);
+        exports.push(TestExport {
+            ref_from: Some(FileId(0)),
+            info: make_export_info("RuntimeBase", Some(base)),
+        });
+        module.class_heritage.extend(
+            make_module_with_class_heritage(1, "RuntimeBase", Some(base), &[]).class_heritage,
+        );
     }
     set_exports(&mut graph, 1, &exports);
     if let Some(source) = import_source {
@@ -545,24 +590,54 @@ fn assert_native_lifecycle_entry(
     origin: Option<SemanticRuntimeOrigin>,
 ) {
     let results = native_lifecycle_member_scan(base, member, kind, source, inherited);
-    assert_eq!(results.class_members.len(), 3, "{base}/{member}/{inherited}");
-    let expected = origin.into_iter().map(|origin| SemanticRuntimeEntry {
-        symbol: SemanticSymbol {
-            path: PathBuf::from("/src/worker.ts"), namespace: SemanticNamespace::Value,
-            declaration_kind: if kind == MemberKind::ClassMethod { "class_method" } else { "class_property" }.to_string(),
-            exported_name: member.to_string(), local_name: member.to_string(),
-            owner: Some("Worker".to_string()), line: 2, col: 5,
-        }, origin,
-    }).collect::<Vec<_>>();
-    assert_eq!(results.runtime_entries, expected, "{base}/{member}/{inherited}");
+    assert_eq!(
+        results.class_members.len(),
+        3,
+        "{base}/{member}/{inherited}"
+    );
+    let expected = origin
+        .into_iter()
+        .map(|origin| SemanticRuntimeEntry {
+            symbol: SemanticSymbol {
+                path: PathBuf::from("/src/worker.ts"),
+                namespace: SemanticNamespace::Value,
+                declaration_kind: if kind == MemberKind::ClassMethod {
+                    "class_method"
+                } else {
+                    "class_property"
+                }
+                .to_string(),
+                exported_name: member.to_string(),
+                local_name: member.to_string(),
+                owner: Some("Worker".to_string()),
+                line: 2,
+                col: 5,
+            },
+            origin,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        results.runtime_entries, expected,
+        "{base}/{member}/{inherited}"
+    );
 }
 
 #[test]
 fn runtime_entries_identify_custom_element_members_without_same_name_credit() {
     use MemberKind::{ClassMethod, ClassProperty};
     for (base, member, kind, origin) in [
-        ("HTMLElement", "connectedCallback", ClassMethod, Some(SemanticRuntimeOrigin::CustomElementLifecycle)),
-        ("HTMLElement", "formAssociated", ClassProperty, Some(SemanticRuntimeOrigin::CustomElementLifecycle)),
+        (
+            "HTMLElement",
+            "connectedCallback",
+            ClassMethod,
+            Some(SemanticRuntimeOrigin::CustomElementLifecycle),
+        ),
+        (
+            "HTMLElement",
+            "formAssociated",
+            ClassProperty,
+            Some(SemanticRuntimeOrigin::CustomElementLifecycle),
+        ),
         ("Component", "connectedCallback", ClassMethod, None),
     ] {
         assert_native_lifecycle_entry(base, member, kind, None, false, origin);
@@ -576,19 +651,41 @@ fn runtime_entries_identify_direct_and_transitive_error_members() {
         ("Error", true, Some(SemanticRuntimeOrigin::ErrorRuntime)),
         ("Person", false, None),
     ] {
-        assert_native_lifecycle_entry(base, "name", MemberKind::ClassProperty, None, inherited, origin);
+        assert_native_lifecycle_entry(
+            base,
+            "name",
+            MemberKind::ClassProperty,
+            None,
+            inherited,
+            origin,
+        );
     }
 }
 
 #[test]
 fn runtime_entries_require_openlayers_import_provenance_through_inheritance() {
     for (source, inherited, origin) in [
-        (Some("ol/interaction/Pointer"), false, Some(SemanticRuntimeOrigin::OpenlayersInteraction)),
-        (Some("ol/interaction"), true, Some(SemanticRuntimeOrigin::OpenlayersInteraction)),
+        (
+            Some("ol/interaction/Pointer"),
+            false,
+            Some(SemanticRuntimeOrigin::OpenlayersInteraction),
+        ),
+        (
+            Some("ol/interaction"),
+            true,
+            Some(SemanticRuntimeOrigin::OpenlayersInteraction),
+        ),
         (None, false, None),
         (Some("other/interaction/Pointer"), false, None),
     ] {
-        assert_native_lifecycle_entry("Pointer", "handleDownEvent", MemberKind::ClassMethod, source, inherited, origin);
+        assert_native_lifecycle_entry(
+            "Pointer",
+            "handleDownEvent",
+            MemberKind::ClassMethod,
+            source,
+            inherited,
+            origin,
+        );
     }
 }
 
