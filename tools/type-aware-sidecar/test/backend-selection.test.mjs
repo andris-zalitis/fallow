@@ -16,22 +16,40 @@ test("every real API entry requires an explicitly selected native backend", () =
   writeFileSync(file, "export const value = 1;\n");
   const calls = [
     ["preflight", () => assertTypescriptBackendResolvable()],
-    ["one-shot", () => analyzeSemanticQueries({
-      root, projects: [],
-      queries: [{ id: 0, operation: "api-surface", entry_points: [], private_leak_candidates: [] }],
-      evidenceLimit: 1,
-      referenceScope: {
-        kind: "graph", mode: "production", sources: ["index.ts"],
-        roots: [{ path: "index.ts", role: "runtime" }], fingerprint: "a".repeat(64),
+    [
+      "one-shot",
+      () =>
+        analyzeSemanticQueries({
+          root,
+          projects: [],
+          queries: [
+            { id: 0, operation: "api-surface", entry_points: [], private_leak_candidates: [] },
+          ],
+          evidenceLimit: 1,
+          referenceScope: {
+            kind: "graph",
+            mode: "production",
+            sources: ["index.ts"],
+            roots: [{ path: "index.ts", role: "runtime" }],
+            fingerprint: "a".repeat(64),
+          },
+        }),
+    ],
+    [
+      "persistent",
+      () => {
+        const session = createSemanticSession(root);
+        session.close();
       },
-    })],
-    ["persistent", () => {
-      const session = createSemanticSession(root);
-      session.close();
-    }],
-    ["mutant", () => checkMutants({
-      root, files: [{ absolutePath: file, sourceSha256: null, mutants: [] }],
-    })],
+    ],
+    [
+      "mutant",
+      () =>
+        checkMutants({
+          root,
+          files: [{ absolutePath: file, sourceSha256: null, mutants: [] }],
+        }),
+    ],
   ];
   try {
     const outcomes = calls.map(([entry, invoke]) => {
@@ -46,9 +64,13 @@ test("every real API entry requires an explicitly selected native backend", () =
       }
     });
     console.log("BACKEND_SELECTION_OUTCOMES=" + JSON.stringify(outcomes));
-    assert.deepEqual(outcomes, calls.map(([entry]) => ({
-      entry, refusedMissingSelection: true,
-    })));
+    assert.deepEqual(
+      outcomes,
+      calls.map(([entry]) => ({
+        entry,
+        refusedMissingSelection: true,
+      })),
+    );
   } finally {
     if (previous === undefined) delete process.env.FALLOW_TYPESCRIPT_BACKEND_MANIFEST;
     else process.env.FALLOW_TYPESCRIPT_BACKEND_MANIFEST = previous;

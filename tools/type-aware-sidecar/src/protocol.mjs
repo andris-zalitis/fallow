@@ -387,13 +387,20 @@ const parseReferenceScope = (value, root) => {
     return { kind: "compiler-program" };
   }
   requireLiteral(value.kind, "graph", "reference_scope.kind");
-  requireExactKeys(value, new Set(["kind", "mode", "sources", "roots", "fingerprint"]), "reference_scope");
+  requireExactKeys(
+    value,
+    new Set(["kind", "mode", "sources", "roots", "fingerprint"]),
+    "reference_scope",
+  );
   if (!["production", "all"].includes(value.mode)) {
     throw new Error("reference_scope.mode must be production or all");
   }
   const identity = (file, field) => {
     const parsed = parseCandidatePath(file, field, root);
-    const canonical = path.relative(root, canonicalFileIdentity(parsed.absolutePath)).split(path.sep).join("/");
+    const canonical = path
+      .relative(root, canonicalFileIdentity(parsed.absolutePath))
+      .split(path.sep)
+      .join("/");
     if (file !== canonical || canonical.startsWith("../")) {
       throw new Error(`${field} must be a canonical source identity within root`);
     }
@@ -402,13 +409,17 @@ const parseReferenceScope = (value, root) => {
   if (!Array.isArray(value.sources) || !Array.isArray(value.roots)) {
     throw new Error("reference_scope.sources and roots must be arrays");
   }
-  const sources = value.sources.map((file, index) => identity(file, `reference_scope.sources[${index}]`));
-  if (new Set(sources).size !== sources.length) throw new Error("reference_scope.sources must be unique");
+  const sources = value.sources.map((file, index) =>
+    identity(file, `reference_scope.sources[${index}]`),
+  );
+  if (new Set(sources).size !== sources.length)
+    throw new Error("reference_scope.sources must be unique");
   const roots = value.roots.map((entry, index) => {
     const field = `reference_scope.roots[${index}]`;
     requireObject(entry, field);
     requireExactKeys(entry, new Set(["path", "role"]), field);
-    if (!["runtime", "test"].includes(entry.role)) throw new Error(`${field}.role must be runtime or test`);
+    if (!["runtime", "test"].includes(entry.role))
+      throw new Error(`${field}.role must be runtime or test`);
     return { path: identity(entry.path, `${field}.path`), role: entry.role };
   });
   if (typeof value.fingerprint !== "string" || !/^[0-9a-f]{64}$/u.test(value.fingerprint)) {
@@ -430,7 +441,13 @@ const parseBatchRequest = (value) => {
   validateGraphQueryCount(queries);
   requireUniqueCandidateIds(queries);
   const evidenceLimit = parseEvidenceLimit(value.evidence_limit);
-  return { root, projects, queries, evidenceLimit, referenceScope: parseReferenceScope(value.reference_scope, root) };
+  return {
+    root,
+    projects,
+    queries,
+    evidenceLimit,
+    referenceScope: parseReferenceScope(value.reference_scope, root),
+  };
 };
 
 const MUTANT_TYPECHECK_REQUEST_KEYS = new Set(["protocol_version", "operation", "root", "files"]);

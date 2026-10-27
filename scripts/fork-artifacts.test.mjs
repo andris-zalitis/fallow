@@ -22,14 +22,30 @@ test("backend reconstruction applies the canonical delta before requiring the co
   const { backend } = backendInputs();
   const fixture = reconstructed(t, backend.source.tree);
   assert.deepEqual(reconstructBackend(fixture.destination, { execute: fixture.execute }), backend);
-  assert.deepEqual(fixture.calls.map(({ args }) => args.slice(0, 2)), [
-    ["git", "init"], ["git", "remote"], ["git", "fetch"],
-    ["git", "sparse-checkout"], ["git", "sparse-checkout"],
-    ["git", "checkout"], ["git", "apply"], ["git", "write-tree"],
-  ]);
-  assert.equal(fixture.calls.every(({ cwd }) => cwd === fixture.destination), true);
+  assert.deepEqual(
+    fixture.calls.map(({ args }) => args.slice(0, 2)),
+    [
+      ["git", "init"],
+      ["git", "remote"],
+      ["git", "fetch"],
+      ["git", "sparse-checkout"],
+      ["git", "sparse-checkout"],
+      ["git", "checkout"],
+      ["git", "apply"],
+      ["git", "write-tree"],
+    ],
+  );
+  assert.equal(
+    fixture.calls.every(({ cwd }) => cwd === fixture.destination),
+    true,
+  );
   assert.deepEqual(fixture.calls[2].args, [
-    "git", "fetch", "--quiet", "--depth=1", "origin", backend.source.base_revision,
+    "git",
+    "fetch",
+    "--quiet",
+    "--depth=1",
+    "origin",
+    backend.source.base_revision,
   ]);
   const apply = fixture.calls[6].args;
   assert.deepEqual(apply.slice(0, -1), ["git", "apply", "--unidiff-zero", "--index"]);
@@ -38,16 +54,25 @@ test("backend reconstruction applies the canonical delta before requiring the co
 
 test("backend reconstruction refuses a different full tree even when its commands succeeded", (t) => {
   const fixture = reconstructed(t, "b".repeat(40));
-  assert.throws(() => reconstructBackend(fixture.destination, { execute: fixture.execute }),
-    /reconstructed backend tree .* does not match/u);
+  assert.throws(
+    () => reconstructBackend(fixture.destination, { execute: fixture.execute }),
+    /reconstructed backend tree .* does not match/u,
+  );
 });
 
 test("backend build has deterministic paths, qualified identity and default embedded libraries", () => {
   const { backend } = backendInputs();
   assert.deepEqual(backendBuildArgs("/toolchain/go", "/output/tsgo", backend), [
-    "/toolchain/go", "build", "-mod=readonly", "-trimpath", "-buildvcs=false",
-    "-ldflags", `-X github.com/microsoft/typescript-go/internal/core.version=${backend.version} -buildid=`,
-    "-o", "/output/tsgo", "./cmd/tsgo",
+    "/toolchain/go",
+    "build",
+    "-mod=readonly",
+    "-trimpath",
+    "-buildvcs=false",
+    "-ldflags",
+    `-X github.com/microsoft/typescript-go/internal/core.version=${backend.version} -buildid=`,
+    "-o",
+    "/output/tsgo",
+    "./cmd/tsgo",
   ]);
   assert.equal(backend.build.library_mode, "embedded");
 });

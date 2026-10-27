@@ -14,7 +14,9 @@ export const verifyBackendArtifact = (manifestPath, { backend, target, publicKey
   }
   const manifest = JSON.parse(bytes.toString("utf8"));
   if (manifest.schema_version !== 1 || !isDeepStrictEqual(manifest.backend, backend)) {
-    throw new Error("native backend manifest does not match the required client/native/source identity");
+    throw new Error(
+      "native backend manifest does not match the required client/native/source identity",
+    );
   }
   if (manifest.target !== target) {
     throw new Error(`native backend target ${manifest.target} does not match ${target}`);

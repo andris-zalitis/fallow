@@ -776,9 +776,12 @@ const scanSymbolUseFile = (root, state, project, sourceFile, includeDefaultImpor
 };
 
 const scanSymbolUseProjects = (root, state, projects, includeDefaultImports, referenceScope) => {
-  const eligible = referenceScope.kind === "graph"
-    ? new Set(referenceScope.sources.map((file) => canonicalFileIdentity(path.resolve(root, file))))
-    : undefined;
+  const eligible =
+    referenceScope.kind === "graph"
+      ? new Set(
+          referenceScope.sources.map((file) => canonicalFileIdentity(path.resolve(root, file))),
+        )
+      : undefined;
   const scannedFiles = new Set();
   let sourceScanCount = 0;
   for (const project of projects) {
@@ -793,13 +796,25 @@ const scanSymbolUseProjects = (root, state, projects, includeDefaultImports, ref
   return sourceScanCount;
 };
 
-const batchSymbolUseEvidence = (root, resolvedQueries, scanProjects, evidenceLimit, referenceScope) => {
+const batchSymbolUseEvidence = (
+  root,
+  resolvedQueries,
+  scanProjects,
+  evidenceLimit,
+  referenceScope,
+) => {
   const state = symbolUseBatchState(resolvedQueries, evidenceLimit);
   resolvedQueries.forEach((entry) => registerSymbolTargets(root, state, entry));
   const includeDefaultImports = resolvedQueries.some(
     ({ query }) => query.symbol.exportedName === "default",
   );
-  const sourceScanCount = scanSymbolUseProjects(root, state, scanProjects, includeDefaultImports, referenceScope);
+  const sourceScanCount = scanSymbolUseProjects(
+    root,
+    state,
+    scanProjects,
+    includeDefaultImports,
+    referenceScope,
+  );
   return {
     evidenceByQuery: state.evidenceByQuery,
     totalByQuery: state.totalByQuery,
@@ -1874,7 +1889,14 @@ const resolveSemanticQueries = ({
   return resolvedByQuery;
 };
 
-const runSymbolUseBatch = (root, queries, resolvedByQuery, semanticProjects, evidenceLimit, referenceScope) => {
+const runSymbolUseBatch = (
+  root,
+  queries,
+  resolvedByQuery,
+  semanticProjects,
+  evidenceLimit,
+  referenceScope,
+) => {
   const resolvedSymbolUses = queries
     .filter((query) => query.symbol)
     .flatMap((query) => {
@@ -1892,7 +1914,13 @@ const runSymbolUseBatch = (root, queries, resolvedByQuery, semanticProjects, evi
       sourceScanCount: 0,
     };
   }
-  return batchSymbolUseEvidence(root, resolvedSymbolUses, semanticProjects, evidenceLimit, referenceScope);
+  return batchSymbolUseEvidence(
+    root,
+    resolvedSymbolUses,
+    semanticProjects,
+    evidenceLimit,
+    referenceScope,
+  );
 };
 
 const analyzeGraphSemanticQuery = (root, query, graphStates, evidenceLimit) => {
@@ -2094,10 +2122,14 @@ const semanticProjectSelection = (snapshot, openProjects, openFiles, allowDefaul
 };
 
 const semanticSetup = (root, projects, queries, referenceScope, api, sessionState) => {
-  const openFiles = [...new Set([
-    ...semanticOpenFiles(queries),
-    ...(referenceScope.kind === "graph" ? referenceScope.sources.map((file) => path.resolve(root, file)) : []),
-  ])];
+  const openFiles = [
+    ...new Set([
+      ...semanticOpenFiles(queries),
+      ...(referenceScope.kind === "graph"
+        ? referenceScope.sources.map((file) => path.resolve(root, file))
+        : []),
+    ]),
+  ];
   const openProjects = semanticOpenProjects(root, projects);
   const openFileSet = new Set(openFiles);
   const openProjectSet = new Set(openProjects);
@@ -2153,12 +2185,16 @@ const attestReferenceScope = (root, scope, queries, states, resolvedByQuery) => 
       const absolute = canonicalFileIdentity(path.resolve(root, file));
       const owners = states.filter(({ project }) => project.program.getSourceFile(absolute));
       if (owners.length === 0 || !owners.some(({ status }) => status === "complete")) {
-        throw new Error(`reference scope source ${file} has no complete owning compiler project: ${owners.map(({ config, reason_code }) => `${config} (${reason_code})`).join(", ") || "no owner"}`);
+        throw new Error(
+          `reference scope source ${file} has no complete owning compiler project: ${owners.map(({ config, reason_code }) => `${config} (${reason_code})`).join(", ") || "no owner"}`,
+        );
       }
     }
     for (const query of queries.filter(({ symbol }) => symbol)) {
       if (resolvedByQuery.get(query.id)?.error || !resolvedByQuery.has(query.id)) {
-        throw new Error(`reference scope candidate ${query.id} has no complete owning compiler project`);
+        throw new Error(
+          `reference scope candidate ${query.id} has no complete owning compiler project`,
+        );
       }
     }
   }
@@ -2166,7 +2202,10 @@ const attestReferenceScope = (root, scope, queries, states, resolvedByQuery) => 
     fingerprint: scope.kind === "graph" ? scope.fingerprint : null,
     source_count: scope.kind === "graph" ? scope.sources.length : 0,
     candidate_count: queries.filter(({ symbol }) => symbol).length,
-    owning_projects: states.filter(({ status }) => status === "complete").map(({ config }) => config).toSorted(),
+    owning_projects: states
+      .filter(({ status }) => status === "complete")
+      .map(({ config }) => config)
+      .toSorted(),
   };
 };
 
@@ -2180,7 +2219,8 @@ const executeSemanticAnalysis = ({
   setup,
 }) => {
   if (setup.selectedProjects.length === 0) {
-    if (referenceScope.kind === "graph") throw new Error("native reference scope has no owning compiler projects");
+    if (referenceScope.kind === "graph")
+      throw new Error("native reference scope has no owning compiler projects");
     return {
       ...emptySemanticAnalysis(queries),
       referenceScopeCoverage: attestReferenceScope(root, referenceScope, queries, [], new Map()),
@@ -2204,7 +2244,13 @@ const executeSemanticAnalysis = ({
   const semanticProjects = states
     .filter((state) => state.status === "complete")
     .map((state) => state.project);
-  const referenceScopeCoverage = attestReferenceScope(root, referenceScope, queries, states, resolvedByQuery);
+  const referenceScopeCoverage = attestReferenceScope(
+    root,
+    referenceScope,
+    queries,
+    states,
+    resolvedByQuery,
+  );
   const symbolUseBatch = runSymbolUseBatch(
     root,
     queries,
@@ -2252,10 +2298,11 @@ export const analyzeSemanticQueries = (
   { root, projects, queries, evidenceLimit, referenceScope },
   { createApi = (cwd) => new API({ cwd, tsserverPath: getSelectedBackend().path }) } = {},
 ) => {
-  if (queries.length === 0 && referenceScope.kind === "compiler-program") return {
-    ...emptyRequestedAnalysis(),
-    referenceScopeCoverage: attestReferenceScope(root, referenceScope, queries, [], new Map()),
-  };
+  if (queries.length === 0 && referenceScope.kind === "compiler-program")
+    return {
+      ...emptyRequestedAnalysis(),
+      referenceScopeCoverage: attestReferenceScope(root, referenceScope, queries, [], new Map()),
+    };
   const setupStartedAt = performance.now();
   const api = createApi(root);
   try {
@@ -2273,7 +2320,10 @@ export const analyzeSemanticQueries = (
   }
 };
 
-export const createSemanticSession = (root, { createApi = (cwd) => new API({ cwd, tsserverPath: getSelectedBackend().path }) } = {}) => {
+export const createSemanticSession = (
+  root,
+  { createApi = (cwd) => new API({ cwd, tsserverPath: getSelectedBackend().path }) } = {},
+) => {
   const api = createApi(root);
   const state = {
     openFiles: new Set(),
@@ -2300,7 +2350,14 @@ export const createSemanticSession = (root, { createApi = (cwd) => new API({ cwd
         evidenceLimit: request.evidenceLimit,
         referenceScope: request.referenceScope,
         setupStartedAt,
-        setup: semanticSetup(root, request.projects, request.queries, request.referenceScope, api, state),
+        setup: semanticSetup(
+          root,
+          request.projects,
+          request.queries,
+          request.referenceScope,
+          api,
+          state,
+        ),
       });
       const invalidationKind = fileChanges?.invalidateAll
         ? "full"
