@@ -340,6 +340,9 @@ mod tests {
             col: 2,
         });
         finding.set_semantic_decision(SemanticCandidateDecision {
+            runtime_contracts: Vec::new(),
+            reference_complete: true,
+            edit_reasons: Vec::new(),
             query_id: 0,
             subject: SemanticSymbol {
                 path: PathBuf::from("src/worker.ts"),

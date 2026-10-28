@@ -2926,9 +2926,9 @@ pub struct UnusedClassMemberFinding {
     /// Type-aware evidence for this exact candidate when requested.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub semantic: Option<SemanticCandidateDecision>,
-    /// Internal marker for a framework member that the syntactic analysis
-    /// suppresses, but the semantic pass may promote after proving complete
-    /// closed-world absence. Never serialized as part of the public finding.
+    /// Internal visibility provenance for a class member hidden by ordinary
+    /// syntactic analysis. The semantic pass may expose it after a complete
+    /// no-reference decision, independently of edit permission. Never serialized.
     #[serde(skip)]
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub semantic_only_candidate: bool,
@@ -2995,8 +2995,8 @@ impl UnusedClassMemberFinding {
         }
     }
 
-    /// Mark this finding as latent until semantic analysis proves that the
-    /// framework contract does not apply and no static references exist.
+    /// Mark this finding as latent until semantic analysis proves no static
+    /// references and no applicable runtime contract.
     #[must_use]
     pub const fn semantic_only_candidate(mut self) -> Self {
         self.semantic_only_candidate = true;
@@ -4825,6 +4825,9 @@ mod mutation_gate {
         };
 
         let complete_negative = || SemanticCandidateDecision {
+            runtime_contracts: Vec::new(),
+            reference_complete: true,
+            edit_reasons: Vec::new(),
             query_id: 0,
             subject: SemanticSymbol {
                 path: PathBuf::from("/p/src/mod.ts"),
@@ -4882,6 +4885,9 @@ mod mutation_gate {
         };
 
         let eligible = || SemanticCandidateDecision {
+            runtime_contracts: Vec::new(),
+            reference_complete: true,
+            edit_reasons: Vec::new(),
             query_id: 0,
             subject: SemanticSymbol {
                 path: PathBuf::from("/p/src/mod.ts"),

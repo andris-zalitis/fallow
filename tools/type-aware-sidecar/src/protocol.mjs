@@ -8,6 +8,7 @@ import {
   WIRE_PROTOCOL_VERSION,
 } from "./generated-protocol.mjs";
 import { canonicalFileIdentity } from "./file-identity.mjs";
+import { runtimeEntryKey } from "./runtime-contracts.mjs";
 import { normalizePhaseTimings, normalizeSemanticResult } from "./response-normalization.mjs";
 
 const require = createRequire(import.meta.url);
@@ -29,6 +30,15 @@ const BATCH_REQUEST_KEYS = new Set([
   "queries",
   "evidence_limit",
   "reference_scope",
+  "runtime_entries",
+]);
+const RUNTIME_ENTRY_KEYS = new Set(["symbol", "origin"]);
+const RUNTIME_ENTRY_ORIGINS = new Set([
+  "public-api",
+  "explicit-member",
+  "custom-element-lifecycle",
+  "error-runtime",
+  "openlayers-interaction",
 ]);
 const SYMBOL_QUERY_KEYS = new Set(["id", "operation", "symbol"]);
 const SYMBOL_USE_QUERY_KEYS = new Set(["id", "operation", "symbol", "framework_contracts"]);
@@ -70,13 +80,12 @@ const SYMBOL_NAMESPACES = new Set(["value", "type"]);
 const MAX_WARNINGS = 20;
 const MAX_WARNING_CHARS = 512;
 const MAX_PROJECTS = 256;
-const MAX_QUERIES = 25_000;
+const MAX_NONCLASS_QUERIES = 25_000;
 const MAX_GRAPH_QUERIES = 256;
 const MAX_PRIVATE_LEAK_CANDIDATES = 25_000;
 const MAX_EVIDENCE_PER_RESULT = 40;
 // A type-coupling result is one project-wide report, so it can carry more
-// evidence than a per-symbol result. This bound keeps the response well below
-// the native client's semantic response byte limit.
+// evidence than a per-symbol result.
 const MAX_TYPE_COUPLING_EVIDENCE = 10_000;
 const MAX_STRING_CHARS = 4_096;
 
@@ -197,6 +206,31 @@ const parseEntryPoints = (value, field, root) =>
   requireBoundedArray(value ?? [], field, MAX_PROJECTS).map((entryPoint, index) =>
     parseCandidatePath(entryPoint, `${field}[${index}]`, root),
   );
+
+const parseRuntimeEntries = (value, root) => {
+  const identities = new Set();
+  return requireArray(value, "runtime_entries").map((entry, index) => {
+    const field = `runtime_entries[${index}]`;
+    requireObject(entry, field);
+    requireExactKeys(entry, RUNTIME_ENTRY_KEYS, field);
+    const origin = requireString(entry.origin, `${field}.origin`);
+    if (!RUNTIME_ENTRY_ORIGINS.has(origin)) throw new Error(`${field}.origin is unsupported`);
+    const symbol = parseSymbolIdentity(entry.symbol, `${field}.symbol`, root);
+    if (symbol.namespace !== "value")
+      throw new Error(`${field}.symbol must use the value namespace`);
+    if (!["export", "class_method", "class_property"].includes(symbol.declarationKind)) {
+      throw new Error(`${field}.symbol must be an export or class member`);
+    }
+    if (symbol.declarationKind === "export" && origin !== "public-api") {
+      throw new Error(`${field} export exposure requires public-api origin`);
+    }
+    const parsed = { symbol, origin };
+    const identity = runtimeEntryKey(parsed);
+    if (identities.has(identity)) throw new Error(`${field} duplicates a runtime entry`);
+    identities.add(identity);
+    return parsed;
+  });
+};
 
 const parsePrivateLeakCandidates = (value, field, root) => {
   const candidates = requireBoundedArray(value ?? [], field, MAX_PRIVATE_LEAK_CANDIDATES).map(
@@ -362,7 +396,16 @@ const parseProjects = (value, root) => {
   return projects;
 };
 
-const validateGraphQueryCount = (queries) => {
+const validateQueryCounts = (queries) => {
+  const nonclassCount = queries.filter(
+    (query) =>
+      query.operation !== "symbol-use" ||
+      (query.symbol.declarationKind !== "class_method" &&
+        query.symbol.declarationKind !== "class_property"),
+  ).length;
+  if (nonclassCount > MAX_NONCLASS_QUERIES) {
+    throw new Error(`queries exceeds the ${MAX_NONCLASS_QUERIES} item limit`);
+  }
   const count = queries.filter(
     (query) => query.operation === "api-surface" || query.operation === "type-coupling",
   ).length;
@@ -435,11 +478,11 @@ const parseBatchRequest = (value) => {
   requireLiteral(value.operation, ANALYSIS_OPERATION, "operation");
   const root = parseRoot(value.root);
   const projects = parseProjects(value.projects, root);
-  const queries = requireBoundedArray(value.queries, "queries", MAX_QUERIES).map((query, index) =>
+  const queries = requireArray(value.queries, "queries").map((query, index) =>
     parseQuery(query, index, root),
   );
-  validateGraphQueryCount(queries);
   requireUniqueCandidateIds(queries);
+  validateQueryCounts(queries);
   const evidenceLimit = parseEvidenceLimit(value.evidence_limit);
   return {
     root,
@@ -447,6 +490,7 @@ const parseBatchRequest = (value) => {
     queries,
     evidenceLimit,
     referenceScope: parseReferenceScope(value.reference_scope, root),
+    runtimeEntries: parseRuntimeEntries(value.runtime_entries, root),
   };
 };
 

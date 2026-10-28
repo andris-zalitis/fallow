@@ -200,15 +200,23 @@ fn plan_response_results(
     let mut type_coupling = None;
     let mut query_summaries = Vec::new();
     let mut source_cache = FxHashMap::default();
+    let queries_by_id = request
+        .queries
+        .iter()
+        .map(|query| (query.id(), query))
+        .collect::<FxHashMap<_, _>>();
+    let runtime_entries = request
+        .runtime_entries
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>();
 
     for result in &response.results {
         let Some(target) = targets.get(&result.query_id) else {
             continue;
         };
-        let query = request
-            .queries
-            .iter()
-            .find(|query| query.id() == result.query_id)
+        let query = queries_by_id
+            .get(&result.query_id)
+            .copied()
             .ok_or_else(|| {
                 TypeAwareError::from(format!(
                     "type-aware response query {} had no matching request",
@@ -225,17 +233,30 @@ fn plan_response_results(
                     result,
                     fix_supported,
                     &mut source_cache,
+                    &runtime_entries,
                 )?;
                 candidates.record_class(results, *index, decision)?;
             }
             QueryTarget::UnusedExport(index) => {
-                let decision =
-                    decode_candidate_decision(root, query, result, false, &mut source_cache)?;
+                let decision = decode_candidate_decision(
+                    root,
+                    query,
+                    result,
+                    false,
+                    &mut source_cache,
+                    &runtime_entries,
+                )?;
                 candidates.record_export(results, *index, decision)?;
             }
             QueryTarget::UnusedType(index) => {
-                let decision =
-                    decode_candidate_decision(root, query, result, false, &mut source_cache)?;
+                let decision = decode_candidate_decision(
+                    root,
+                    query,
+                    result,
+                    false,
+                    &mut source_cache,
+                    &runtime_entries,
+                )?;
                 candidates.record_type(results, *index, decision)?;
             }
             QueryTarget::ApiSurface {

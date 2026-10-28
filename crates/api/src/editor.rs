@@ -1335,6 +1335,14 @@ pub(crate) mod tests {
         assert_eq!(target.duplicate_prop_shapes.len(), 1);
         assert_eq!(target.active_suppressions.len(), 1);
         assert_eq!(target.semantic_framework_contracts.len(), 1);
+        assert_eq!(target.semantic_runtime_entries.len(), 1);
+        let runtime_entry = &target.semantic_runtime_entries[0];
+        assert_eq!(runtime_entry.symbol.path, PathBuf::from("/entry.ts"));
+        assert_eq!(runtime_entry.symbol.local_name, "run");
+        assert_eq!(
+            runtime_entry.origin,
+            fallow_types::semantic::SemanticRuntimeOrigin::PublicApi
+        );
         assert_eq!(target.security_unresolved_callee_sites, 3);
         assert_eq!(target.unused_component_props_exempted, 1);
     }
@@ -2091,6 +2099,19 @@ pub(crate) mod tests {
                 heritage_names: vec!["LitElement".to_string()],
                 relation: fallow_types::semantic::SemanticFrameworkRelation::Extends,
                 members: vec!["render".to_string()],
+            }],
+            semantic_runtime_entries: vec![fallow_types::semantic::SemanticRuntimeEntry {
+                symbol: fallow_types::semantic::SemanticSymbol {
+                    path: "/entry.ts".into(),
+                    namespace: fallow_types::semantic::SemanticNamespace::Value,
+                    declaration_kind: "function".to_string(),
+                    exported_name: "run".to_string(),
+                    local_name: "run".to_string(),
+                    owner: None,
+                    line: 1,
+                    col: 0,
+                },
+                origin: fallow_types::semantic::SemanticRuntimeOrigin::PublicApi,
             }],
         }
     }

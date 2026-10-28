@@ -1,5 +1,6 @@
 import { getSelectedBackend } from "../src/backend-preflight.mjs";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   mkdtempSync,
@@ -56,6 +57,7 @@ const write = (root, relativePath, contents) => {
 
 const semanticRequest = (root, queries, options = {}) => ({
   protocol_version: WIRE_PROTOCOL_VERSION,
+  runtime_entries: [],
   reference_scope: { kind: "compiler-program" },
   operation: ANALYSIS_OPERATION,
   root,
@@ -673,9 +675,16 @@ test("protocol v7 does not treat paired accessors as uses of each other", () => 
 
     assert.deepEqual(
       response.results.map(({ assertion }) => assertion),
-      ["no-confirmed-use", "no-confirmed-use"],
+      ["confirmed-no-static-references", "confirmed-no-static-references"],
     );
-    assert.ok(response.results.every(({ reason_code }) => reason_code === "accessor-pair"));
+    assert.equal(response.results.length, 2);
+    for (const result of response.results) {
+      assert.equal(result.status, "complete");
+      assert.equal(result.data.reference_complete, true);
+      assert.deepEqual(result.data.edit_reasons, ["accessor-pair"]);
+      assert.equal(result.data.closed_world_eligible, false);
+      assert.deepEqual(result.omissions, []);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1837,7 +1846,7 @@ test("protocol v7 preserves required interface, abstract, and inherited contract
   }
 });
 
-test("protocol v7 abstains for optional contracts, decorators, and dynamic member access", () => {
+test("reference completeness is independent of declaration edit constraints", () => {
   const cases = [
     {
       reason: "optional-contract",
@@ -1941,9 +1950,23 @@ test("protocol v7 abstains for optional contracts, decorators, and dynamic membe
         semanticRequest(root, [{ id: 44, operation: "symbol-use", symbol }]),
       );
       const result = response.results[0];
-      assert.equal(result.assertion, "no-confirmed-use");
-      assert.equal(result.status, "partial");
-      assert.equal(result.reason_code, expected.reason);
+      const runtimeGap = ["decorated-declaration", "dynamic-member-access"].includes(
+        expected.reason,
+      );
+      assert.equal(
+        result.assertion,
+        runtimeGap ? "no-confirmed-use" : "confirmed-no-static-references",
+      );
+      assert.equal(result.status, runtimeGap ? "partial" : "complete");
+      assert.equal(result.data.reference_complete, !runtimeGap);
+      if (runtimeGap) {
+        assert.equal(result.reason_code, expected.reason);
+        assert.deepEqual(result.data.edit_reasons, []);
+      } else {
+        assert.deepEqual(result.data.edit_reasons, [expected.reason]);
+        assert.deepEqual(result.omissions, []);
+        assert.equal(result.actions.length, 1);
+      }
       assert.equal(result.data.closed_world_eligible, false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -2468,9 +2491,11 @@ test("protocol v7 scopes literal dynamic import uncertainty to its module", () =
 
     assert.equal(response.results[0].status, "partial");
     assert.equal(response.results[0].reason_code, "dynamic-behavior");
+    assert.equal(response.results[0].data.reference_complete, false);
     assert.equal(response.results[1].status, "complete");
     assert.equal(response.results[1].assertion, "confirmed-no-static-references");
-    assert.equal(response.results[1].data.closed_world_eligible, true);
+    assert.equal(response.results[1].data.reference_complete, true);
+    assert.equal(response.results[1].data.closed_world_eligible, false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -3183,3 +3208,347 @@ test("unknown external framework package provenance abstains", () => {
     rmSync(monorepo, { recursive: true, force: true });
   }
 });
+
+test("native runtime entries preserve exact contracts without inventing references", () => {
+  const root = makeProject();
+  try {
+    write(
+      root,
+      "tsconfig.json",
+      JSON.stringify({ compilerOptions: { strict: true }, include: ["src"] }),
+    );
+    const source = [
+      "export class Worker { run(): void {} }",
+      "export class Other { run(): void {} }",
+      "export function publicRun(): void {}",
+      "export const version = 1;",
+      "",
+    ].join("\n");
+    write(root, "src/worker.ts", source);
+    const queries = ["Worker", "Other"].map((owner, id) =>
+      classMemberQuery({
+        id,
+        file: "src/worker.ts",
+        owner,
+        member: "run",
+        kind: "class_method",
+        ...utf8Position(source, "run", id + 1),
+      }),
+    );
+    const publicSymbols = ["publicRun", "version"].map((name, index) => ({
+      id: index + 2,
+      operation: "symbol-use",
+      symbol: symbolIdentity({
+        source,
+        marker: name,
+        file: "src/worker.ts",
+        namespace: "value",
+        declarationKind: "export",
+        exportedName: name,
+      }),
+      framework_contracts: [],
+    }));
+    // Exercise the semantic API on the old producer too: the new wire parser
+    // must not be the baseline failure in this behavioral discriminator.
+    const parsed = parseRequest(semanticRequest(root, [...queries, ...publicSymbols]));
+    const runtimeEntries = [
+      { symbol: parsed.queries[0].symbol, origin: "explicit-member" },
+      ...parsed.queries.slice(2).map(({ symbol }) => ({ symbol, origin: "public-api" })),
+    ];
+    const request = { ...parsed, queries: parsed.queries.slice(0, 2), runtimeEntries };
+    const response = analyzeSemanticQueries(request);
+    assert.equal(response.results.length, 2);
+    const [preserved, dead] = response.results;
+    assert.equal(preserved.assertion, "contract-preserved");
+    assert.equal(preserved.data.total_reference_count, 0);
+    assert.equal(preserved.data.closed_world_eligible, false);
+    assert.equal(preserved.data.runtime_contracts.length, 1);
+    assert.equal(preserved.data.runtime_contracts[0].origin, "explicit-member");
+    assert.equal(preserved.data.runtime_contracts[0].symbol.owner, "Worker");
+    assert.equal(dead.assertion, "confirmed-no-static-references");
+    assert.deepEqual(dead.data.runtime_contracts, []);
+    assert.equal(response.referenceScopeCoverage.entry_count, 3);
+    assert.match(response.referenceScopeCoverage.entry_digest, /^[a-f0-9]{64}$/u);
+    const entriesOnly = analyzeSemanticQueries({ ...request, queries: [] });
+    assert.deepEqual(entriesOnly.results, []);
+    assert.equal(entriesOnly.referenceScopeCoverage.entry_count, 3);
+    assert.equal(
+      entriesOnly.referenceScopeCoverage.entry_digest,
+      response.referenceScopeCoverage.entry_digest,
+    );
+    const session = createSemanticSession(root);
+    try {
+      const persistent = session.analyze(request, { revision: 1 });
+      assert.deepEqual(persistent.results, response.results);
+      assert.deepEqual(persistent.referenceScopeCoverage, response.referenceScopeCoverage);
+      assert.throws(
+        () =>
+          session.analyze(
+            {
+              ...request,
+              runtimeEntries: [
+                {
+                  ...runtimeEntries[0],
+                  symbol: {
+                    ...runtimeEntries[0].symbol,
+                    localName: "missing",
+                    exportedName: "missing",
+                  },
+                },
+              ],
+            },
+            { revision: 2 },
+          ),
+        /runtime entry 0 .*no complete exact declaration ownership/u,
+      );
+    } finally {
+      session.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+const nativeExportCases = [
+  ["default-arrow", "export default () => {};\n", "default", "default", "export"],
+  ["default-literal", "export default 42;\n", "default", "default", "export"],
+  ["default-object", "export default { run() {} };\n", "default", "default", "export"],
+  [
+    "default-function-forward",
+    "function run() {}\nexport default run;\n",
+    "default",
+    "run",
+    "export",
+  ],
+  [
+    "default-arrow-forward",
+    "const run = () => {};\nexport default run;\n",
+    "default",
+    "run",
+    "export",
+  ],
+  ["object-binding", "export const { run } = { run() {} };\n", "run", "run", "run"],
+  [
+    "renamed-binding",
+    "export const { run: renamed } = { run() {} };\n",
+    "renamed",
+    "renamed",
+    "renamed",
+  ],
+  [
+    "nested-binding",
+    "export const { outer: { run } } = { outer: { run() {} } };\n",
+    "run",
+    "run",
+    "run",
+  ],
+  ["array-binding", "export const [run] = [() => {}];\n", "run", "run", "run"],
+];
+
+// An independent wire-level expectation: these are the exact native input fields,
+// not a digest computed by the production runtime-contract owner.
+const expectedEntryDigest = (entries) =>
+  createHash("sha256")
+    .update(
+      JSON.stringify(
+        entries
+          .map(({ symbol, origin }) =>
+            JSON.stringify([
+              symbol.path,
+              symbol.namespace,
+              symbol.declaration_kind,
+              symbol.exported_name,
+              symbol.local_name,
+              symbol.owner ?? null,
+              symbol.line,
+              symbol.col,
+              origin,
+            ]),
+          )
+          .toSorted((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right))),
+      ),
+    )
+    .digest("hex");
+
+for (const [name, source, exportedName, localName, marker] of nativeExportCases) {
+  test(`native export anchors attest ${name} and retain its exact target`, () => {
+    const root = makeProject();
+    try {
+      write(
+        root,
+        "tsconfig.json",
+        JSON.stringify({ compilerOptions: { strict: true }, include: ["src"] }),
+      );
+      write(root, "src/entry.ts", source);
+      const symbol = symbolIdentity({
+        source,
+        marker,
+        file: "src/entry.ts",
+        namespace: "value",
+        declarationKind: "export",
+        exportedName,
+        localName,
+      });
+      const entries = [{ symbol, origin: "public-api" }];
+      const querySymbol =
+        name === "default-function-forward"
+          ? {
+              ...symbol,
+              declaration_kind: "function",
+              exported_name: "run",
+              ...utf8Position(source, "function"),
+            }
+          : symbol;
+      const request = parseRequest({
+        ...semanticRequest(root, [
+          { id: 0, operation: "symbol-use", symbol: querySymbol, framework_contracts: [] },
+        ]),
+        runtime_entries: entries,
+      });
+      const response = analyzeSemanticQueries(request);
+      assert.equal(response.results.length, 1);
+      assert.equal(response.results[0].status, "complete");
+      assert.deepEqual(response.results[0].data.runtime_contracts, entries);
+      assert.equal(response.referenceScopeCoverage.entry_count, 1);
+      assert.equal(response.referenceScopeCoverage.entry_digest, expectedEntryDigest(entries));
+      assert.equal(response.referenceScopeCoverage.candidate_count, 1);
+      const entriesOnly = analyzeSemanticQueries({ ...request, queries: [] });
+      assert.deepEqual(entriesOnly.results, []);
+      assert.deepEqual(entriesOnly.referenceScopeCoverage, {
+        ...response.referenceScopeCoverage,
+        candidate_count: 0,
+      });
+      const session = createSemanticSession(root);
+      try {
+        const persistent = session.analyze(request, { revision: 1 });
+        assert.deepEqual(persistent.results, response.results);
+        assert.deepEqual(persistent.referenceScopeCoverage, response.referenceScopeCoverage);
+        assert.throws(
+          () =>
+            session.analyze(
+              {
+                ...request,
+                runtimeEntries: [
+                  {
+                    ...request.runtimeEntries[0],
+                    symbol: { ...request.runtimeEntries[0].symbol, col: symbol.col + 1 },
+                  },
+                ],
+              },
+              { revision: 2 },
+            ),
+          /runtime entry 0 .*no complete exact declaration ownership/u,
+        );
+      } finally {
+        session.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const className of ["Named", ""]) {
+  test(`native default-class owner round-trips ${className || "anonymous"} contracts and edit subjects`, () => {
+    const root = makeProject();
+    try {
+      write(
+        root,
+        "tsconfig.json",
+        JSON.stringify({ compilerOptions: { strict: true }, include: ["src"] }),
+      );
+      const source = [
+        `export default class ${className} {`,
+        "  run(): void {}",
+        "  remove(): void {}",
+        "}",
+        "class Sibling {",
+        "  run(): void {}",
+        "}",
+        "",
+      ].join("\n");
+      write(root, "src/entry.ts", source);
+      const queries = [
+        classMemberQuery({
+          id: 0,
+          file: "src/entry.ts",
+          owner: "default",
+          member: "run",
+          line: 2,
+          col: 2,
+        }),
+        classMemberQuery({
+          id: 1,
+          file: "src/entry.ts",
+          owner: "default",
+          member: "remove",
+          line: 3,
+          col: 2,
+        }),
+        classMemberQuery({
+          id: 2,
+          file: "src/entry.ts",
+          owner: "Sibling",
+          member: "run",
+          line: 6,
+          col: 2,
+        }),
+      ];
+      const entries = [
+        {
+          symbol: {
+            path: "src/entry.ts",
+            namespace: "value",
+            declaration_kind: "export",
+            exported_name: "default",
+            local_name: className || "default",
+            line: 1,
+            col: 0,
+          },
+          origin: "public-api",
+        },
+        { symbol: queries[0].symbol, origin: "explicit-member" },
+      ];
+      const request = parseRequest({ ...semanticRequest(root, queries), runtime_entries: entries });
+      const response = analyzeSemanticQueries(request);
+      assert.equal(response.results.length, 3);
+      const [preserved, removable, sibling] = response.results;
+      assert.equal(preserved.assertion, "contract-preserved");
+      assert.equal(preserved.data.total_reference_count, 0);
+      assert.equal(preserved.data.closed_world_eligible, false);
+      assert.deepEqual(preserved.data.runtime_contracts, [entries[1]]);
+      assert.deepEqual(preserved.data.symbol, queries[0].symbol);
+      for (const [result, query] of [
+        [removable, queries[1]],
+        [sibling, queries[2]],
+      ]) {
+        assert.equal(result.assertion, "confirmed-no-static-references");
+        assert.equal(result.data.total_reference_count, 0);
+        assert.deepEqual(result.data.runtime_contracts, []);
+        assert.equal(result.data.closed_world_eligible, true);
+        assert.deepEqual(result.data.symbol, query.symbol);
+        const guard = result.data.edit_guard;
+        assert.equal(source.slice(guard.start, guard.end), `${query.symbol.local_name}(): void {}`);
+      }
+      assert.equal(response.referenceScopeCoverage.entry_count, 2);
+      assert.equal(response.referenceScopeCoverage.entry_digest, expectedEntryDigest(entries));
+      assert.equal(response.referenceScopeCoverage.candidate_count, 3);
+      const entriesOnly = analyzeSemanticQueries({ ...request, queries: [] });
+      assert.deepEqual(entriesOnly.results, []);
+      assert.deepEqual(entriesOnly.referenceScopeCoverage, {
+        ...response.referenceScopeCoverage,
+        candidate_count: 0,
+      });
+      const session = createSemanticSession(root);
+      try {
+        const persistent = session.analyze(request, { revision: 1 });
+        assert.deepEqual(persistent.results, response.results);
+        assert.deepEqual(persistent.referenceScopeCoverage, response.referenceScopeCoverage);
+      } finally {
+        session.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}

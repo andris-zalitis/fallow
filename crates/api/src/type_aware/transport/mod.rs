@@ -32,7 +32,8 @@ use discovery::{canonicalize_root, discover_type_aware_sidecar, non_empty_env};
 #[cfg(all(test, windows))]
 use process::sidecar_command_with_script;
 use process::{
-    SidecarTimeout, join_sidecar_worker, read_bounded_stream, run_sidecar_json, sidecar_command,
+    SidecarIoPolicy, SidecarTimeout, join_sidecar_worker, read_stream, run_sidecar_json,
+    sidecar_command,
 };
 #[cfg(test)]
 use process::{bounded_text, sanitize_search_path};
@@ -46,7 +47,6 @@ const SIDECAR_TIMEOUT_ENV: &str = "FALLOW_TYPE_AWARE_TIMEOUT_SECS";
 const DEFAULT_SIDECAR_TIMEOUT_SECS: u64 = 120;
 const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
-const MAX_SEMANTIC_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_STDERR_BYTES: usize = MAX_STDERR_CHARS * 4;
 const MAX_STDERR_CHARS: usize = 4_096;
 static NEXT_ACTIVE_SIDECAR_ID: AtomicU64 = AtomicU64::new(1);
@@ -230,7 +230,7 @@ pub fn status(root: &Path) -> TypeAwareStatus {
         root,
         &request,
         sidecar_timeout(),
-        MAX_RESPONSE_BYTES,
+        SidecarIoPolicy::Bounded,
     ) {
         Ok(response)
             if response.protocol_version == TYPE_AWARE_PROTOCOL_VERSION
@@ -327,7 +327,7 @@ where
         &root,
         request,
         sidecar_timeout(),
-        MAX_SEMANTIC_RESPONSE_BYTES,
+        SidecarIoPolicy::Semantic,
     )
     .map_err(TypeAwareError)
 }
@@ -634,10 +634,120 @@ mod tests {
     #[test]
     fn oversized_response_is_rejected_during_read() {
         let response = std::io::Cursor::new(vec![b'x'; 65]);
-        let error = read_bounded_stream(response, 64, "response", None)
+        let error = read_stream(response, Some(64), "response", None)
             .expect_err("oversized response should fail");
 
         assert!(error.contains("exceeded the 64-byte limit"));
+    }
+
+    #[cfg(unix)]
+    fn large_envelope_sidecar() -> (tempfile::TempDir, PathBuf) {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let install = tempfile::tempdir().expect("temporary sidecar install");
+        let sidecar = install.path().join("large-envelope.mjs");
+        fs::write(
+            &sidecar,
+            r#"#!/usr/bin/env node
+import fs from "node:fs";
+import readline from "node:readline";
+const session = process.argv.includes("--session");
+fs.appendFileSync("launches", "1\n");
+const reply = (request) => {
+  fs.appendFileSync("requests", "1\n");
+  return { echo: request.payload, padding: "p".repeat(request.response_bytes) };
+};
+if (session) {
+  for await (const line of readline.createInterface({ input: process.stdin })) {
+    const envelope = JSON.parse(line);
+    if (envelope.type === "shutdown") break;
+    process.stdout.write(`${JSON.stringify({
+      request_id: envelope.request_id,
+      revision: envelope.revision,
+      response: reply(envelope.request),
+    })}\n`);
+  }
+} else {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  process.stdout.write(`${JSON.stringify(reply(JSON.parse(Buffer.concat(chunks))))}\n`);
+}
+"#,
+        )
+        .expect("write recording sidecar");
+        let mut permissions = fs::metadata(&sidecar)
+            .expect("sidecar metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&sidecar, permissions).expect("executable sidecar");
+        let sidecar = sidecar.canonicalize().expect("canonical sidecar");
+        (install, sidecar)
+    }
+
+    #[cfg(unix)]
+    fn assert_complete_large_envelope(response: &serde_json::Value, install: &Path) {
+        let echo = response["echo"].as_str().expect("echoed request");
+        assert_eq!(echo, "q".repeat(8 * 1024 * 1024 + 1));
+        let padding = response["padding"].as_str().expect("full response");
+        assert_eq!(padding.len(), 32 * 1024 * 1024 + 1);
+        assert!(padding.bytes().all(|byte| byte == b'p'));
+        assert_eq!(
+            std::fs::read_to_string(install.join("launches")).expect("launch record"),
+            "1\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(install.join("requests")).expect("request record"),
+            "1\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_shot_semantic_envelopes_preserve_data_beyond_former_byte_limits() {
+        let _lifecycle_lock = lock_sidecar_lifecycle_tests();
+        let root = tempfile::tempdir().expect("temporary project");
+        let (install, sidecar) = large_envelope_sidecar();
+        let request = serde_json::json!({
+            "payload": "q".repeat(8 * 1024 * 1024 + 1),
+            "response_bytes": 32 * 1024 * 1024 + 1,
+        });
+        let response: serde_json::Value = run_sidecar_json(
+            &sidecar,
+            root.path(),
+            &request,
+            sidecar_timeout(),
+            SidecarIoPolicy::Semantic,
+        )
+        .expect("complete one-shot semantic envelope");
+        assert_complete_large_envelope(&response, install.path());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persistent_semantic_envelopes_preserve_data_beyond_former_byte_limits() {
+        let _lifecycle_lock = lock_sidecar_lifecycle_tests();
+        let root = tempfile::tempdir().expect("temporary project");
+        let root = root.path().canonicalize().expect("canonical project");
+        let (install, sidecar) = large_envelope_sidecar();
+        let process = TypeAwareSessionProcess::spawn(&sidecar, &root).expect("persistent sidecar");
+        let mut session = TypeAwareSession {
+            root: root.clone(),
+            process: Some(process),
+            request_id: 0,
+            revision: 0,
+            cancellation: None,
+        };
+        let request = serde_json::json!({
+            "payload": "q".repeat(8 * 1024 * 1024 + 1),
+            "response_bytes": 32 * 1024 * 1024 + 1,
+        });
+        let response: serde_json::Value = session
+            .run_semantic_request(&root, &request, None)
+            .expect("complete persistent semantic envelope");
+        assert_complete_large_envelope(&response, install.path());
+        assert_eq!(session.request_id, 1);
+        assert_eq!(session.revision, 1);
     }
 
     #[cfg(unix)]
@@ -667,7 +777,7 @@ mod tests {
             root.path(),
             &request,
             Duration::from_millis(100),
-            MAX_RESPONSE_BYTES,
+            SidecarIoPolicy::Bounded,
         )
         .expect_err("blocked sidecar should time out");
 
@@ -714,7 +824,7 @@ mod tests {
                     operation: "status",
                 },
                 Duration::from_secs(30),
-                MAX_RESPONSE_BYTES,
+                SidecarIoPolicy::Bounded,
             )
         });
 
@@ -806,7 +916,6 @@ for await (const line of lines) {
         let cancellation = Arc::new(AtomicBool::new(false));
         let mut session = TypeAwareSession {
             root: canonical_root.clone(),
-            sidecar: canonical_sidecar,
             process: Some(process),
             request_id: 0,
             revision: 0,
@@ -850,24 +959,13 @@ for await (const line of lines) {
 
     #[cfg(unix)]
     #[test]
-    fn persistent_session_restarts_once_with_full_invalidation() {
+    fn persistent_session_returns_first_transport_error_without_replay() {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
 
         #[derive(Serialize)]
         struct Request {
             value: u32,
-        }
-
-        #[derive(Debug, Deserialize)]
-        struct Response {
-            value: u32,
-            request_id: u64,
-            revision: u64,
-            invalidate_all: bool,
-            launches: u32,
-            first_process_id: u32,
-            process_id: u32,
         }
 
         let _lifecycle_lock = lock_sidecar_lifecycle_tests();
@@ -927,25 +1025,31 @@ for await (const line of lines) {
             .expect("spawn persistent sidecar");
         let mut session = TypeAwareSession {
             root: canonical_root.clone(),
-            sidecar: canonical_sidecar,
             process: Some(process),
             request_id: 0,
             revision: 0,
             cancellation: None,
         };
 
-        let response: Response = session
-            .run_semantic_request(&canonical_root, &Request { value: 7 }, None)
-            .expect("request succeeds after one restart");
+        let error = session
+            .run_semantic_request::<_, serde_json::Value>(
+                &canonical_root,
+                &Request { value: 7 },
+                None,
+            )
+            .expect_err("the first transport error must be returned without replay");
 
-        assert_eq!(response.value, 7);
-        assert_eq!(response.request_id, 2);
-        assert_eq!(response.revision, 2);
-        assert!(response.invalidate_all);
-        assert_eq!(response.launches, 2);
-        assert_ne!(response.first_process_id, response.process_id);
-        assert_eq!(session.request_id, 2);
-        assert_eq!(session.revision, 2);
+        assert!(
+            error.to_string().contains("response identity mismatch"),
+            "{error}"
+        );
+        let state: serde_json::Value = serde_json::from_slice(
+            &fs::read(install.path().join(".session-restart-state.json")).expect("launch record"),
+        )
+        .expect("recorded state");
+        assert_eq!(state["launches"], 1);
+        assert_eq!(session.request_id, 1);
+        assert_eq!(session.revision, 1);
     }
 
     #[cfg(unix)]
@@ -1009,7 +1113,6 @@ for await (const line of lines) {
         let cancellation_marker = sidecar_dir.join(".session-cancelled");
         let mut session = TypeAwareSession {
             root: canonical_root.clone(),
-            sidecar: canonical_sidecar,
             process: Some(process),
             request_id: 0,
             revision: 0,

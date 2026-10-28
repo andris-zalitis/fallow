@@ -26,6 +26,7 @@ const request = (root, referenceScope, evidenceLimit = 1) => ({
   root,
   projects: ["tsconfig.json"],
   evidence_limit: evidenceLimit,
+  runtime_entries: [],
   reference_scope: referenceScope,
   queries: [
     {

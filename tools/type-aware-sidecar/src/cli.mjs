@@ -3,6 +3,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 
 import {
+  ANALYSIS_OPERATION,
   MUTANT_TYPECHECK_OPERATION,
   SESSION_ENVELOPE_TYPES,
   STATUS_OPERATION,
@@ -30,7 +31,7 @@ export const readAll = async (input, maximumBytes = MAX_REQUEST_BYTES) => {
   for await (const chunk of input) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     byteLength += buffer.byteLength;
-    if (byteLength > maximumBytes) {
+    if (maximumBytes !== null && byteLength > maximumBytes) {
       throw new Error(`stdin exceeded the ${maximumBytes} byte request limit`);
     }
     chunks.push(buffer);
@@ -84,9 +85,6 @@ const runSession = async (input, output, backendIdentity) => {
   let root;
   try {
     for await (const line of lines) {
-      if (Buffer.byteLength(line, "utf8") > MAX_REQUEST_BYTES) {
-        throw new Error(`session request exceeded the ${MAX_REQUEST_BYTES} byte limit`);
-      }
       const envelope = parseJsonRequest(line);
       if (envelope?.type === SHUTDOWN_ENVELOPE) return;
       if (
@@ -151,7 +149,14 @@ export const run = async ({ input, output, args = [], backendIdentity = getSelec
     throw new Error(`unknown argument: ${args[0]}`);
   }
   const startedAt = performance.now();
-  const rawRequest = parseJsonRequest(await readAll(input));
+  const source = await readAll(input, null);
+  const rawRequest = parseJsonRequest(source);
+  if (
+    rawRequest?.operation !== ANALYSIS_OPERATION &&
+    Buffer.byteLength(source, "utf8") > MAX_REQUEST_BYTES
+  ) {
+    throw new Error(`stdin exceeded the ${MAX_REQUEST_BYTES} byte request limit`);
+  }
   if (isStatusRequest(rawRequest)) {
     writeJson(output, createStatusResponse(backendIdentity));
     return;

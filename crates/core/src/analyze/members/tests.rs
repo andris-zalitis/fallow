@@ -39,6 +39,7 @@ fn find_unused_members(
         line_offsets_by_file,
         user_class_member_allowlist,
         semantic_framework_candidates: &[],
+        semantic_class_members: false,
         ignore_decorators,
         public_api_entry_points: &FxHashSet::default(),
         lit_active: false,
@@ -175,6 +176,516 @@ fn make_self_member(name: &str) -> MemberInfo {
     MemberInfo {
         is_self_returning: true,
         ..make_member(name, MemberKind::ClassMethod)
+    }
+}
+
+fn member_results_in_semantic_mode(
+    graph: &TestGraphFixture,
+    semantic: bool,
+) -> fallow_types::results::AnalysisResults {
+    member_results_with_config(
+        graph,
+        &member_test_config(semantic),
+        &SuppressionContext::empty(),
+    )
+}
+
+fn member_test_config(semantic: bool) -> fallow_config::ResolvedConfig {
+    use fallow_config::{FallowConfig, OutputFormat, Severity};
+
+    let mut config = FallowConfig::default().resolve(
+        PathBuf::from("/src"),
+        OutputFormat::Human,
+        1,
+        true,
+        true,
+        None,
+    );
+    config.type_aware.enabled = semantic;
+    config.rules.unused_class_members = Severity::Error;
+    config.rules.unused_enum_members = Severity::Error;
+    config.rules.unused_store_members = Severity::Warn;
+    config
+}
+
+fn member_results_with_config(
+    graph: &TestGraphFixture,
+    config: &fallow_config::ResolvedConfig,
+    suppressions: &SuppressionContext<'_>,
+) -> fallow_types::results::AnalysisResults {
+    use super::super::{MemberDetectorInput, run_member_detectors};
+
+    run_member_detectors(MemberDetectorInput {
+        graph,
+        resolved_modules: &graph.resolved_modules,
+        modules: &[],
+        config,
+        suppressions,
+        line_offsets_by_file: &FxHashMap::default(),
+        user_class_members: &[],
+        semantic_framework_candidates: &[],
+        public_api_entry_points: &FxHashSet::default(),
+        declared_deps: &FxHashSet::from_iter(["pinia".to_string()]),
+    })
+}
+
+#[test]
+fn semantic_candidates_survive_export_visibility_and_entry_gates() {
+    for (is_entry, referenced, whole_object, ordinary_count) in [
+        (false, false, false, 0),
+        (false, true, true, 0),
+        (true, true, false, 0),
+        (false, true, false, 2),
+    ] {
+        let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/worker.ts", is_entry)]);
+        graph.set_reachable(1);
+        set_exports(
+            &mut graph,
+            1,
+            &[make_export_with_members(
+                "Worker",
+                vec![
+                    make_member("run", MemberKind::ClassMethod),
+                    make_member("value", MemberKind::ClassProperty),
+                ],
+                referenced.then_some(0),
+            )],
+        );
+        if whole_object {
+            graph.resolved_modules[0].whole_object_uses = vec!["Worker".to_string()].into();
+        }
+
+        let ordinary = member_results_in_semantic_mode(&graph, false);
+        assert_eq!(ordinary.unused_class_members.len(), ordinary_count);
+        let semantic = member_results_in_semantic_mode(&graph, true);
+        assert_eq!(semantic.unused_class_members.len(), 2);
+        let mut candidates = semantic
+            .unused_class_members
+            .iter()
+            .map(|finding| {
+                assert_eq!(finding.member.path, Path::new("/src/worker.ts"));
+                assert_eq!(finding.member.parent_name, "Worker");
+                assert_eq!(finding.semantic_only_candidate, ordinary_count == 0);
+                (finding.member.member_name.as_str(), finding.member.kind)
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|(name, _)| *name);
+        assert_eq!(
+            candidates,
+            vec![
+                ("run", MemberKind::ClassMethod),
+                ("value", MemberKind::ClassProperty)
+            ]
+        );
+    }
+}
+
+#[test]
+fn semantic_candidates_preserve_each_members_syntactic_visibility() {
+    let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/worker.ts", false)]);
+    set_exports(
+        &mut graph,
+        1,
+        &[make_export_with_members(
+            "Worker",
+            vec![
+                make_member("run", MemberKind::ClassMethod),
+                make_member("value", MemberKind::ClassProperty),
+                make_member("untouched", MemberKind::ClassMethod),
+                make_member("nested", MemberKind::NamespaceMember),
+            ],
+            Some(0),
+        )],
+    );
+    graph.resolved_modules[0].member_accesses = vec![MemberAccess {
+        object: "Worker".to_string(),
+        member: "run".to_string(),
+    }]
+    .into();
+    graph.resolved_modules[1].member_accesses = vec![MemberAccess {
+        object: "this".to_string(),
+        member: "value".to_string(),
+    }]
+    .into();
+
+    let ordinary = member_results_in_semantic_mode(&graph, false);
+    assert_eq!(ordinary.unused_class_members.len(), 1);
+    assert_eq!(
+        ordinary.unused_class_members[0].member.member_name,
+        "untouched"
+    );
+    assert!(!ordinary.unused_class_members[0].semantic_only_candidate);
+
+    let semantic = member_results_in_semantic_mode(&graph, true);
+    let mut candidates = semantic
+        .unused_class_members
+        .iter()
+        .map(|finding| {
+            assert_eq!(finding.member.path, Path::new("/src/worker.ts"));
+            assert_eq!(finding.member.parent_name, "Worker");
+            (
+                finding.member.member_name.as_str(),
+                finding.member.kind,
+                finding.semantic_only_candidate,
+            )
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(name, _, _)| *name);
+    assert_eq!(
+        candidates,
+        vec![
+            ("run", MemberKind::ClassMethod, true),
+            ("untouched", MemberKind::ClassMethod, false),
+            ("value", MemberKind::ClassProperty, true),
+        ]
+    );
+}
+
+#[test]
+fn semantic_class_collection_preserves_enum_and_store_visibility() {
+    for (is_entry, referenced, whole_object, classes, enums, stores) in [
+        (false, false, false, 0, 0, 0),
+        (false, true, true, 0, 0, 0),
+        (true, true, false, 0, 0, 1),
+        (false, true, false, 1, 1, 1),
+    ] {
+        let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/mixed.ts", is_entry)]);
+        graph.set_reachable(1);
+        set_exports(
+            &mut graph,
+            1,
+            &[make_export_with_members(
+                "Mixed",
+                vec![
+                    make_member("method", MemberKind::ClassMethod),
+                    make_member("variant", MemberKind::EnumMember),
+                    make_member("action", MemberKind::StoreMember),
+                ],
+                referenced.then_some(0),
+            )],
+        );
+        if whole_object {
+            graph.resolved_modules[0].whole_object_uses = vec!["Mixed".to_string()].into();
+        }
+        for semantic in [false, true] {
+            let results = member_results_in_semantic_mode(&graph, semantic);
+            assert_eq!(
+                results.unused_class_members.len(),
+                if semantic { 1 } else { classes }
+            );
+            assert_eq!(results.unused_enum_members.len(), enums);
+            assert_eq!(results.unused_store_members.len(), stores);
+            if let Some(finding) = results.unused_class_members.first() {
+                assert_eq!(finding.member.member_name, "method");
+                assert_eq!(finding.semantic_only_candidate, classes == 0);
+            }
+            if let Some(finding) = results.unused_enum_members.first() {
+                assert_eq!(finding.member.member_name, "variant");
+            }
+            if let Some(finding) = results.unused_store_members.first() {
+                assert_eq!(finding.member.member_name, "action");
+            }
+        }
+    }
+}
+
+#[test]
+fn semantic_candidates_respect_suppression_and_rule_severity() {
+    use crate::suppress::{IssueKind, Suppression};
+    use fallow_config::Severity;
+
+    let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/worker.ts", false)]);
+    set_exports(
+        &mut graph,
+        1,
+        &[make_export_with_members(
+            "Worker",
+            vec![
+                make_member("run", MemberKind::ClassMethod),
+                make_member("variant", MemberKind::EnumMember),
+            ],
+            Some(0),
+        )],
+    );
+    let suppressions = [Suppression::issue(1, 0, IssueKind::UnusedClassMember)];
+    let suppressed =
+        SuppressionContext::from_map(FxHashMap::from_iter([(FileId(1), suppressions.as_slice())]));
+    for semantic in [false, true] {
+        let mut config = member_test_config(semantic);
+        let results = member_results_with_config(&graph, &config, &SuppressionContext::empty());
+        assert_eq!(results.unused_class_members.len(), 1);
+        assert_eq!(results.unused_enum_members.len(), 1);
+
+        let results = member_results_with_config(&graph, &config, &suppressed);
+        assert!(results.unused_class_members.is_empty());
+        assert_eq!(results.unused_enum_members.len(), 1);
+
+        config.rules.unused_class_members = Severity::Off;
+        let results = member_results_with_config(&graph, &config, &SuppressionContext::empty());
+        assert!(results.unused_class_members.is_empty());
+        assert_eq!(results.unused_enum_members.len(), 1);
+    }
+}
+
+#[test]
+fn runtime_entries_include_suppressed_public_members_and_non_candidate_exports() {
+    use crate::suppress::{IssueKind, Suppression};
+    let mut graph = build_graph(&[("/src/index.ts", true)]);
+    set_exports(
+        &mut graph,
+        0,
+        &[
+            make_export_with_members(
+                "Worker",
+                vec![make_member("run", MemberKind::ClassMethod)],
+                None,
+            ),
+            make_export_with_members("publicRun", Vec::new(), None),
+        ],
+    );
+    let suppressions = [Suppression::issue(1, 0, IssueKind::UnusedClassMember)];
+    let suppressed =
+        SuppressionContext::from_map(FxHashMap::from_iter([(FileId(0), suppressions.as_slice())]));
+    let results = find_unused_members_with_public_api_entry_points(UnusedMemberScanInput {
+        graph: &graph,
+        resolved_modules: &graph.resolved_modules,
+        modules: &[],
+        suppressions: &suppressed,
+        line_offsets_by_file: &FxHashMap::default(),
+        user_class_member_allowlist: &[],
+        semantic_framework_candidates: &[],
+        semantic_class_members: true,
+        ignore_decorators: &[],
+        public_api_entry_points: &FxHashSet::from_iter([FileId(0)]),
+        lit_active: false,
+    });
+    assert!(results.class_members.is_empty());
+    assert_eq!(results.runtime_entries.len(), 3);
+    assert_eq!(
+        results
+            .runtime_entries
+            .iter()
+            .map(|entry| (
+                entry.symbol.exported_name.as_str(),
+                entry.symbol.owner.as_deref(),
+                entry.origin,
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("run", Some("Worker"), SemanticRuntimeOrigin::PublicApi),
+            ("Worker", None, SemanticRuntimeOrigin::PublicApi),
+            ("publicRun", None, SemanticRuntimeOrigin::PublicApi),
+        ]
+    );
+}
+
+#[test]
+fn runtime_entries_survive_disabled_finding_rules_without_framework_spelling_credit() {
+    use super::super::{MemberDetectorInput, run_member_detectors};
+    use fallow_config::Severity;
+    let mut graph = build_graph(&[("/src/index.ts", true)]);
+    set_exports(
+        &mut graph,
+        0,
+        &[make_export_with_members(
+            "Worker",
+            vec![
+                make_member("run", MemberKind::ClassMethod),
+                make_member("componentDidMount", MemberKind::ClassMethod),
+                make_member("ngOnInit", MemberKind::ClassMethod),
+            ],
+            None,
+        )],
+    );
+    let mut config = member_test_config(true);
+    config.rules.unused_class_members = Severity::Off;
+    config.rules.unused_enum_members = Severity::Off;
+    config.rules.unused_store_members = Severity::Off;
+    let results = run_member_detectors(MemberDetectorInput {
+        graph: &graph,
+        resolved_modules: &graph.resolved_modules,
+        modules: &[],
+        config: &config,
+        suppressions: &SuppressionContext::empty(),
+        line_offsets_by_file: &FxHashMap::default(),
+        user_class_members: &[UsedClassMemberRule::from("run")],
+        semantic_framework_candidates: &[],
+        public_api_entry_points: &FxHashSet::default(),
+        declared_deps: &FxHashSet::default(),
+    });
+    assert!(results.unused_class_members.is_empty());
+    assert_eq!(results.semantic_runtime_entries.len(), 1);
+    assert_eq!(
+        results.semantic_runtime_entries[0].symbol.exported_name,
+        "run"
+    );
+    assert_eq!(
+        results.semantic_runtime_entries[0].origin,
+        SemanticRuntimeOrigin::ExplicitMember
+    );
+}
+
+fn native_lifecycle_member_scan(
+    base: &str,
+    member: &str,
+    kind: MemberKind,
+    import_source: Option<&str>,
+    inherited: bool,
+) -> UnusedMemberResults {
+    let mut graph = build_graph(&[("/src/index.ts", true), ("/src/worker.ts", false)]);
+    graph.set_reachable(1);
+    let worker_base = if inherited { "RuntimeBase" } else { base };
+    let mut worker = make_export_with_members(
+        "Worker",
+        vec![
+            make_member(member, kind),
+            make_member("unusedSibling", MemberKind::ClassMethod),
+        ],
+        Some(0),
+    );
+    worker.info.local_name = Some("Worker".to_string());
+    worker.info.super_class = Some(worker_base.to_string());
+    let mut exports = vec![
+        worker,
+        make_export_with_members("Other", vec![make_member(member, kind)], Some(0)),
+    ];
+    let mut module = make_module_with_class_heritage(1, "Worker", Some(worker_base), &[]);
+    if inherited {
+        exports.push(TestExport {
+            ref_from: Some(FileId(0)),
+            info: make_export_info("RuntimeBase", Some(base)),
+        });
+        module.class_heritage.extend(
+            make_module_with_class_heritage(1, "RuntimeBase", Some(base), &[]).class_heritage,
+        );
+    }
+    set_exports(&mut graph, 1, &exports);
+    if let Some(source) = import_source {
+        let mut import = make_resolved_import(source, "Pointer", "Pointer", 1);
+        import.target = ResolveResult::NpmPackage(source.split('/').next().unwrap().to_string());
+        graph.resolved_modules[1].resolved_imports.push(import);
+    }
+    let line_offsets = [0, 5];
+    find_unused_members_with_public_api_entry_points(UnusedMemberScanInput {
+        graph: &graph,
+        resolved_modules: &graph.resolved_modules,
+        modules: &[module],
+        suppressions: &SuppressionContext::empty(),
+        line_offsets_by_file: &FxHashMap::from_iter([(FileId(1), line_offsets.as_slice())]),
+        user_class_member_allowlist: &[],
+        semantic_framework_candidates: &[],
+        semantic_class_members: true,
+        ignore_decorators: &[],
+        public_api_entry_points: &FxHashSet::default(),
+        lit_active: false,
+    })
+}
+
+fn assert_native_lifecycle_entry(
+    base: &str,
+    member: &str,
+    kind: MemberKind,
+    source: Option<&str>,
+    inherited: bool,
+    origin: Option<SemanticRuntimeOrigin>,
+) {
+    let results = native_lifecycle_member_scan(base, member, kind, source, inherited);
+    assert_eq!(
+        results.class_members.len(),
+        3,
+        "{base}/{member}/{inherited}"
+    );
+    let expected = origin
+        .into_iter()
+        .map(|origin| SemanticRuntimeEntry {
+            symbol: SemanticSymbol {
+                path: PathBuf::from("/src/worker.ts"),
+                namespace: SemanticNamespace::Value,
+                declaration_kind: if kind == MemberKind::ClassMethod {
+                    "class_method"
+                } else {
+                    "class_property"
+                }
+                .to_string(),
+                exported_name: member.to_string(),
+                local_name: member.to_string(),
+                owner: Some("Worker".to_string()),
+                line: 2,
+                col: 5,
+            },
+            origin,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        results.runtime_entries, expected,
+        "{base}/{member}/{inherited}"
+    );
+}
+
+#[test]
+fn runtime_entries_identify_custom_element_members_without_same_name_credit() {
+    use MemberKind::{ClassMethod, ClassProperty};
+    for (base, member, kind, origin) in [
+        (
+            "HTMLElement",
+            "connectedCallback",
+            ClassMethod,
+            Some(SemanticRuntimeOrigin::CustomElementLifecycle),
+        ),
+        (
+            "HTMLElement",
+            "formAssociated",
+            ClassProperty,
+            Some(SemanticRuntimeOrigin::CustomElementLifecycle),
+        ),
+        ("Component", "connectedCallback", ClassMethod, None),
+    ] {
+        assert_native_lifecycle_entry(base, member, kind, None, false, origin);
+    }
+}
+
+#[test]
+fn runtime_entries_identify_direct_and_transitive_error_members() {
+    for (base, inherited, origin) in [
+        ("Error", false, Some(SemanticRuntimeOrigin::ErrorRuntime)),
+        ("Error", true, Some(SemanticRuntimeOrigin::ErrorRuntime)),
+        ("Person", false, None),
+    ] {
+        assert_native_lifecycle_entry(
+            base,
+            "name",
+            MemberKind::ClassProperty,
+            None,
+            inherited,
+            origin,
+        );
+    }
+}
+
+#[test]
+fn runtime_entries_require_openlayers_import_provenance_through_inheritance() {
+    for (source, inherited, origin) in [
+        (
+            Some("ol/interaction/Pointer"),
+            false,
+            Some(SemanticRuntimeOrigin::OpenlayersInteraction),
+        ),
+        (
+            Some("ol/interaction"),
+            true,
+            Some(SemanticRuntimeOrigin::OpenlayersInteraction),
+        ),
+        (None, false, None),
+        (Some("other/interaction/Pointer"), false, None),
+    ] {
+        assert_native_lifecycle_entry(
+            "Pointer",
+            "handleDownEvent",
+            MemberKind::ClassMethod,
+            source,
+            inherited,
+            origin,
+        );
     }
 }
 
@@ -3145,6 +3656,13 @@ fn ambiguous_star_re_exports_suppress_only_participating_member_exports() {
             .any(|member| member.parent_name == "Other" && member.member_name == "unused"),
         "an unrelated export in a contributor file must still report: {class_members:?}"
     );
+
+    let semantic = member_results_in_semantic_mode(&graph, true);
+    assert_eq!(semantic.unused_class_members.len(), 1);
+    let finding = &semantic.unused_class_members[0];
+    assert_eq!(finding.member.parent_name, "Other");
+    assert_eq!(finding.member.member_name, "unused");
+    assert!(!finding.semantic_only_candidate);
 }
 
 #[test]

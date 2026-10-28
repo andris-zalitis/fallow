@@ -30,9 +30,11 @@ import {
 } from "typescript/unstable/ast/is";
 
 import { canonicalFileIdentity } from "./file-identity.mjs";
+import { runtimeEntryDigest, runtimeEntryWire } from "./runtime-contracts.mjs";
 import { projectResult, projectState } from "./project-state.mjs";
 import {
   declarationName,
+  declarationMemberGroup,
   declarationNamespaces,
   declarationsForSymbol,
   findDeclaration,
@@ -241,6 +243,7 @@ const boundedResult = ({
   evidenceLimit,
   totalEvidenceCount,
   omissions: extraOmissions = [],
+  actions: extraActions = [],
 }) => {
   const ordered = orderedEvidence(evidence);
   const totalEvidence = totalEvidenceCount === undefined ? ordered.length : totalEvidenceCount;
@@ -257,7 +260,7 @@ const boundedResult = ({
     assertion,
     status: resultStatus(partial),
     reasonCode: resultReason(omissions),
-    actions: resultActions(omissions),
+    actions: [...new Set([...resultActions(omissions), ...extraActions])],
     evidence: ordered.slice(0, evidenceLimit),
     totalEvidenceCount: totalEvidence,
     truncated,
@@ -896,7 +899,7 @@ const resolvedAnchorTarget = (project, anchor, requestedSymbol) => {
       ? { declaration: anchor, namespace: requestedSymbol.namespace }
       : undefined;
   }
-  const checkerSymbol = project.checker.getSymbolAtLocation(anchor.name);
+  const checkerSymbol = symbolForDeclaration(project, anchor);
   const declarations = declarationsForSymbol(project, resolveAlias(project.checker, checkerSymbol));
   const exact = declarations.find((node) =>
     declarationNamespaces(node).has(requestedSymbol.namespace),
@@ -945,23 +948,16 @@ const accessorPairExists = (declaration) => {
   if (!isGetAccessorDeclaration(declaration) && !isSetAccessorDeclaration(declaration)) {
     return false;
   }
-  const owner = ownerDeclaration(declaration);
-  const name = declarationName(declaration);
   return Boolean(
-    owner?.members?.some(
+    declarationMemberGroup(declaration).some(
       (member) =>
         member !== declaration &&
-        declarationName(member) === name &&
         (isGetAccessorDeclaration(member) || isSetAccessorDeclaration(member)),
     ),
   );
 };
 
-const sameNamedMemberCount = (declaration) => {
-  const owner = ownerDeclaration(declaration);
-  const name = declarationName(declaration);
-  return owner?.members?.filter((member) => declarationName(member) === name).length ?? 0;
-};
+const sameNamedMemberCount = (declaration) => declarationMemberGroup(declaration).length;
 
 const hasAttachedComment = (declaration) => {
   const sourceFile = declaration.getSourceFile();
@@ -1161,6 +1157,7 @@ const resolveSymbolQuery = (
   );
   const declarationOwnerNode = ownerDeclaration(primary.declaration);
   const declarationUncertainties = new Set();
+  const editReasons = new Set();
   if (frameworkContractEvidence.some(({ provenanceUnknown }) => provenanceUnknown)) {
     declarationUncertainties.add("framework-contract-provenance");
   }
@@ -1171,19 +1168,19 @@ const resolveSymbolQuery = (
     declarationUncertainties.add("dynamic-member-access");
   }
   if (contractRelations.some((relation) => relation.optional)) {
-    declarationUncertainties.add("optional-contract");
+    editReasons.add("optional-contract");
   }
   if (accessorPairExists(primary.declaration)) {
-    declarationUncertainties.add("accessor-pair");
+    editReasons.add("accessor-pair");
   }
   if (sameNamedMemberCount(primary.declaration) > 1 && !accessorPairExists(primary.declaration)) {
-    declarationUncertainties.add("overload-set");
+    editReasons.add("overload-set");
   }
   if (hasAttachedComment(primary.declaration)) {
-    declarationUncertainties.add("attached-comment");
+    editReasons.add("attached-comment");
   }
   if (modifierNamed(primary.declaration, "abstract")) {
-    declarationUncertainties.add("abstract-declaration");
+    editReasons.add("abstract-declaration");
   }
   return {
     ...primary,
@@ -1192,6 +1189,7 @@ const resolveSymbolQuery = (
     contractRelations,
     frameworkContractRelations,
     declarationUncertainties,
+    editReasons: [...editReasons].toSorted(compareText),
     editGuard: declarationEditGuard(primary.declaration),
     omissions: resolutionOmissions(
       context.owners,
@@ -1214,21 +1212,26 @@ const analyzeSymbolUse = (
   const uncertainties = new Set([...resolved.declarationUncertainties, ...batchUncertainties]);
   const requiredContracts = resolved.contractRelations.filter((relation) => !relation.optional);
   const frameworkContracts = resolved.frameworkContractRelations;
+  const runtimeContracts = resolved.runtimeContracts;
   const omissions = [
     ...resolved.omissions,
     ...[...uncertainties].map((reason_code) => ({ reason_code, count: 1 })),
   ];
+  const referenceComplete = omissions.every((omission) => omission.count === 0);
   const closedWorldEligible =
+    referenceComplete &&
+    query.symbol.declarationKind === "class_method" &&
+    resolved.editReasons.length === 0 &&
     totalEvidenceCount === 0 &&
     requiredContracts.length === 0 &&
     frameworkContracts.length === 0 &&
-    omissions.every((omission) => omission.count === 0);
+    runtimeContracts.length === 0;
   const assertion =
     totalEvidenceCount > 0
       ? "confirmed-used"
-      : requiredContracts.length > 0 || frameworkContracts.length > 0
+      : requiredContracts.length > 0 || frameworkContracts.length > 0 || runtimeContracts.length > 0
         ? "contract-preserved"
-        : closedWorldEligible
+        : referenceComplete
           ? "confirmed-no-static-references"
           : "no-confirmed-use";
   return boundedResult({
@@ -1238,6 +1241,7 @@ const analyzeSymbolUse = (
     evidenceLimit,
     totalEvidenceCount,
     omissions,
+    actions: resolved.editReasons.map(actionForReason),
     data: {
       symbol: semanticQueryIdentity(root, query, resolved),
       selected_project: resolved.state.config,
@@ -1245,6 +1249,9 @@ const analyzeSymbolUse = (
       total_reference_count: totalEvidenceCount,
       contract_relations: resolved.contractRelations,
       framework_contract_relations: frameworkContracts,
+      runtime_contracts: runtimeContracts,
+      reference_complete: referenceComplete,
+      edit_reasons: resolved.editReasons,
       closed_world_eligible: closedWorldEligible,
       edit_guard: resolved.editGuard,
     },
@@ -2099,6 +2106,32 @@ const emptyRequestedAnalysis = () => ({
   warnings: [],
 });
 
+const resolveRuntimeEntries = (context, runtimeEntries, resolvedByQuery) => {
+  const byDeclaration = new Map();
+  runtimeEntries.forEach((entry, index) => {
+    const resolved = resolveSymbolQuery(
+      context.root,
+      context.snapshot,
+      context.explicitProjects,
+      context.statesByProject,
+      { symbol: entry.symbol, frameworkContracts: [] },
+      context.allowDefaultFallback,
+    );
+    if (resolved.error || resolved.omissions.some(({ count }) => count > 0)) {
+      throw new Error(
+        `runtime entry ${index} (${entry.symbol.path}:${entry.symbol.line}) has no complete exact declaration ownership`,
+      );
+    }
+    const key = resolvedIdentityKey(resolved);
+    if (!byDeclaration.has(key)) byDeclaration.set(key, []);
+    byDeclaration.get(key).push(runtimeEntryWire(entry));
+  });
+  for (const resolved of resolvedByQuery.values()) {
+    if (!resolved.error)
+      resolved.runtimeContracts = byDeclaration.get(resolvedIdentityKey(resolved)) ?? [];
+  }
+};
+
 const semanticOpenFiles = (queries) =>
   queries.filter((query) => query.symbol).map((query) => query.symbol.absolutePath);
 
@@ -2121,10 +2154,19 @@ const semanticProjectSelection = (snapshot, openProjects, openFiles, allowDefaul
   return { explicitProjects, selectedProjects };
 };
 
-const semanticSetup = (root, projects, queries, referenceScope, api, sessionState) => {
+const semanticSetup = (
+  root,
+  projects,
+  queries,
+  runtimeEntries,
+  referenceScope,
+  api,
+  sessionState,
+) => {
   const openFiles = [
     ...new Set([
       ...semanticOpenFiles(queries),
+      ...semanticOpenFiles(runtimeEntries),
       ...(referenceScope.kind === "graph"
         ? referenceScope.sources.map((file) => path.resolve(root, file))
         : []),
@@ -2179,7 +2221,7 @@ const graphProjectStates = (states, explicitProjects) => {
   return states.filter((state) => explicitProjectSet.has(state.project));
 };
 
-const attestReferenceScope = (root, scope, queries, states, resolvedByQuery) => {
+const attestReferenceScope = (root, scope, queries, states, resolvedByQuery, runtimeEntries) => {
   if (scope.kind === "graph") {
     for (const file of scope.sources) {
       const absolute = canonicalFileIdentity(path.resolve(root, file));
@@ -2202,6 +2244,8 @@ const attestReferenceScope = (root, scope, queries, states, resolvedByQuery) => 
     fingerprint: scope.kind === "graph" ? scope.fingerprint : null,
     source_count: scope.kind === "graph" ? scope.sources.length : 0,
     candidate_count: queries.filter(({ symbol }) => symbol).length,
+    entry_count: runtimeEntries.length,
+    entry_digest: runtimeEntryDigest(runtimeEntries),
     owning_projects: states
       .filter(({ status }) => status === "complete")
       .map(({ config }) => config)
@@ -2213,17 +2257,25 @@ const executeSemanticAnalysis = ({
   root,
   projects,
   queries,
+  runtimeEntries,
   evidenceLimit,
   referenceScope,
   setupStartedAt,
   setup,
 }) => {
   if (setup.selectedProjects.length === 0) {
-    if (referenceScope.kind === "graph")
+    if (referenceScope.kind === "graph" || runtimeEntries.length > 0)
       throw new Error("native reference scope has no owning compiler projects");
     return {
       ...emptySemanticAnalysis(queries),
-      referenceScopeCoverage: attestReferenceScope(root, referenceScope, queries, [], new Map()),
+      referenceScopeCoverage: attestReferenceScope(
+        root,
+        referenceScope,
+        queries,
+        [],
+        new Map(),
+        runtimeEntries,
+      ),
     };
   }
   const projectSetupMs = performance.now() - setupStartedAt;
@@ -2241,6 +2293,17 @@ const executeSemanticAnalysis = ({
     queries,
     allowDefaultFallback: setup.allowDefaultFallback,
   });
+  resolveRuntimeEntries(
+    {
+      root,
+      snapshot: setup.snapshot,
+      explicitProjects: setup.explicitProjects,
+      statesByProject,
+      allowDefaultFallback: setup.allowDefaultFallback,
+    },
+    runtimeEntries,
+    resolvedByQuery,
+  );
   const semanticProjects = states
     .filter((state) => state.status === "complete")
     .map((state) => state.project);
@@ -2250,6 +2313,7 @@ const executeSemanticAnalysis = ({
     queries,
     states,
     resolvedByQuery,
+    runtimeEntries,
   );
   const symbolUseBatch = runSymbolUseBatch(
     root,
@@ -2295,13 +2359,24 @@ const executeDisposableSemanticAnalysis = (input) => {
 };
 
 export const analyzeSemanticQueries = (
-  { root, projects, queries, evidenceLimit, referenceScope },
+  { root, projects, queries, runtimeEntries, evidenceLimit, referenceScope },
   { createApi = (cwd) => new API({ cwd, tsserverPath: getSelectedBackend().path }) } = {},
 ) => {
-  if (queries.length === 0 && referenceScope.kind === "compiler-program")
+  if (
+    queries.length === 0 &&
+    runtimeEntries.length === 0 &&
+    referenceScope.kind === "compiler-program"
+  )
     return {
       ...emptyRequestedAnalysis(),
-      referenceScopeCoverage: attestReferenceScope(root, referenceScope, queries, [], new Map()),
+      referenceScopeCoverage: attestReferenceScope(
+        root,
+        referenceScope,
+        queries,
+        [],
+        new Map(),
+        runtimeEntries,
+      ),
     };
   const setupStartedAt = performance.now();
   const api = createApi(root);
@@ -2310,10 +2385,11 @@ export const analyzeSemanticQueries = (
       root,
       projects,
       queries,
+      runtimeEntries,
       evidenceLimit,
       referenceScope,
       setupStartedAt,
-      setup: semanticSetup(root, projects, queries, referenceScope, api),
+      setup: semanticSetup(root, projects, queries, runtimeEntries, referenceScope, api),
     });
   } finally {
     api.close();
@@ -2347,6 +2423,7 @@ export const createSemanticSession = (
         root,
         projects: request.projects,
         queries: request.queries,
+        runtimeEntries: request.runtimeEntries,
         evidenceLimit: request.evidenceLimit,
         referenceScope: request.referenceScope,
         setupStartedAt,
@@ -2354,6 +2431,7 @@ export const createSemanticSession = (
           root,
           request.projects,
           request.queries,
+          request.runtimeEntries,
           request.referenceScope,
           api,
           state,

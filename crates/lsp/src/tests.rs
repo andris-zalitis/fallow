@@ -176,9 +176,9 @@ fn failed_type_aware_project_does_not_merge_syntactic_output() {
 }
 
 #[test]
-fn successful_type_aware_project_merges_edit_safety_partial_outcome() {
+fn successful_type_aware_project_merges_complete_references_and_edit_constraints() {
     if rerun_type_aware_project_test(
-        "tests::successful_type_aware_project_merges_edit_safety_partial_outcome",
+        "tests::successful_type_aware_project_merges_complete_references_and_edit_constraints",
         false,
     ) {
         return;
@@ -193,8 +193,18 @@ fn successful_type_aware_project_merges_edit_safety_partial_outcome() {
         .expect("documented unused export remains a finding");
     let decision = finding.semantic.as_ref().expect("semantic decision");
     assert_eq!(
-        decision.reason_code,
-        Some(fallow_types::semantic::SemanticGapReason::AttachedComment)
+        decision.decision,
+        fallow_types::semantic::SemanticCandidateDecisionKind::ConfirmedNoStaticReferences
+    );
+    assert_eq!(
+        decision.status,
+        fallow_types::semantic::SemanticCompleteness::Complete
+    );
+    assert!(decision.reference_complete);
+    assert_eq!(decision.reason_code, None);
+    assert_eq!(
+        decision.edit_reasons,
+        [fallow_types::semantic::SemanticEditReason::AttachedComment]
     );
     assert!(!decision.closed_world_eligible);
     assert_eq!(kept_sessions, 1);

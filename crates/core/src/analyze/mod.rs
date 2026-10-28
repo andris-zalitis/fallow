@@ -2605,7 +2605,9 @@ struct MemberDetectorInput<'a> {
 fn run_member_detectors(input: MemberDetectorInput<'_>) -> AnalysisResults {
     let mut results = AnalysisResults::default();
     let store_members_active = store_member_rule_is_active(input.config, input.declared_deps);
-    if member_rules_are_disabled(input.config, store_members_active) {
+    if member_rules_are_disabled(input.config, store_members_active)
+        && !input.config.type_aware.enabled
+    {
         return results;
     }
 
@@ -2617,6 +2619,7 @@ fn run_member_detectors(input: MemberDetectorInput<'_>) -> AnalysisResults {
         line_offsets_by_file: input.line_offsets_by_file,
         user_class_member_allowlist: input.user_class_members,
         semantic_framework_candidates: input.semantic_framework_candidates,
+        semantic_class_members: input.config.type_aware.enabled,
         ignore_decorators: &input.config.ignore_decorators,
         public_api_entry_points: input.public_api_entry_points,
         lit_active: input.declared_deps.contains("lit")
@@ -2630,6 +2633,7 @@ fn run_member_detectors(input: MemberDetectorInput<'_>) -> AnalysisResults {
         store_members_active,
         member_results.store_members,
     );
+    results.semantic_runtime_entries = member_results.runtime_entries;
     results
 }
 

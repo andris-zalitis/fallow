@@ -25211,6 +25211,24 @@
           ],
           "description": "Framework-owned contract evidence, distinct from TypeScript contracts."
         },
+        "runtime_contracts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SemanticRuntimeEntry"
+          },
+          "description": "Exact native contracts, independent of source-reference evidence."
+        },
+        "reference_complete": {
+          "type": "boolean",
+          "description": "Whether exact reference analysis completed independently of edit safety."
+        },
+        "edit_reasons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SemanticEditReason"
+          },
+          "description": "Declaration constraints withholding a guarded source edit."
+        },
         "closed_world_eligible": {
           "type": "boolean",
           "description": "Whether this exact decision may enable a guarded class-member fix."
@@ -25270,6 +25288,7 @@
         "decision",
         "status",
         "owning_projects",
+        "reference_complete",
         "closed_world_eligible",
         "explanation",
         "total_evidence_count",
@@ -34219,6 +34238,14 @@
           "type": "integer",
           "description": "Number of symbol candidates resolved in this batch."
         },
+        "entry_count": {
+          "type": "integer",
+          "description": "Number of exact native runtime entries resolved in this batch."
+        },
+        "entry_digest": {
+          "type": "string",
+          "description": "SHA-256 of the canonical requested runtime-entry set."
+        },
         "owning_projects": {
           "type": "array",
           "items": {
@@ -34230,9 +34257,90 @@
       "required": [
         "source_count",
         "candidate_count",
+        "entry_count",
+        "entry_digest",
         "owning_projects"
       ],
       "description": "Executed compiler coverage of the requested native reference domain."
+    },
+    "SemanticRuntimeEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "symbol": {
+          "description": "Exact declaration identity, in the same coordinates as a candidate.",
+          "$ref": "#/definitions/SemanticSymbol"
+        },
+        "origin": {
+          "description": "Native owner which established the exposure or contract.",
+          "$ref": "#/definitions/SemanticRuntimeOrigin"
+        }
+      },
+      "required": [
+        "symbol",
+        "origin"
+      ],
+      "description": "Native exposure or runtime contract for an exact source declaration.\n\nPublic exports carry exposure; the compiler resolves their callable bodies.\nNoncallable values do not manufacture an activation. Entries are independent\nof finding suppression and the unused-candidate list."
+    },
+    "SemanticRuntimeOrigin": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "public-api",
+          "description": "An exact package-public export or member."
+        },
+        {
+          "type": "string",
+          "const": "explicit-member",
+          "description": "A member explicitly preserved by the configured member rules."
+        },
+        {
+          "type": "string",
+          "const": "custom-element-lifecycle",
+          "description": "A native custom-element lifecycle member."
+        },
+        {
+          "type": "string",
+          "const": "error-runtime",
+          "description": "A member consumed by the native Error runtime contract."
+        },
+        {
+          "type": "string",
+          "const": "openlayers-interaction",
+          "description": "An OpenLayers interaction member dispatched by its native contract."
+        }
+      ],
+      "description": "Native contract provenance, distinct from checker-validated frameworks."
+    },
+    "SemanticEditReason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "optional-contract",
+          "description": "An optional inherited or interface declaration needs human review."
+        },
+        {
+          "type": "string",
+          "const": "accessor-pair",
+          "description": "Accessors must be edited together."
+        },
+        {
+          "type": "string",
+          "const": "overload-set",
+          "description": "An overload group must be edited together."
+        },
+        {
+          "type": "string",
+          "const": "attached-comment",
+          "description": "Attached source comments need human review."
+        },
+        {
+          "type": "string",
+          "const": "abstract-declaration",
+          "description": "The declaration defines an abstract contract."
+        }
+      ],
+      "description": "Declaration edit constraints which do not omit runtime references."
     }
   }
 }

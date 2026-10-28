@@ -779,6 +779,7 @@ fn classify_changed_file_filter_fields(results: &AnalysisResults) {
         render_fan_in: _render_fan_in,
         react_component_intel: _react_component_intel,
         semantic_framework_contracts: _semantic_framework_contracts,
+        semantic_runtime_entries: _semantic_runtime_entries,
     } = results;
 }
 

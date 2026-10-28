@@ -196,6 +196,14 @@ export type SemanticContractRelation = ("interface-implementation" | "abstract-i
  */
 export type SemanticFrameworkRelation = ("extends" | "implements")
 /**
+ * Native contract provenance, distinct from checker-validated frameworks.
+ */
+export type SemanticRuntimeOrigin = ("public-api" | "explicit-member" | "custom-element-lifecycle" | "error-runtime" | "openlayers-interaction")
+/**
+ * Declaration edit constraints which do not omit runtime references.
+ */
+export type SemanticEditReason = ("optional-contract" | "accessor-pair" | "overload-set" | "attached-comment" | "abstract-declaration")
+/**
  * Confidence of exact-symbol impact analysis after known dynamic gaps.
  */
 export type SemanticImpactConfidence = ("high" | "bounded" | "unavailable")
@@ -2177,6 +2185,14 @@ source_count: number
  */
 candidate_count: number
 /**
+ * Number of exact native runtime entries resolved in this batch.
+ */
+entry_count: number
+/**
+ * SHA-256 of the canonical requested runtime-entry set.
+ */
+entry_digest: string
+/**
  * Complete configured/inferred projects owning the analyzed sources/candidates.
  */
 owning_projects: string[]
@@ -2276,6 +2292,18 @@ contract?: (SemanticContractEvidence | null)
  * Framework-owned contract evidence, distinct from TypeScript contracts.
  */
 framework_contract?: (SemanticFrameworkContractEvidence | null)
+/**
+ * Exact native contracts, independent of source-reference evidence.
+ */
+runtime_contracts?: SemanticRuntimeEntry[]
+/**
+ * Whether exact reference analysis completed independently of edit safety.
+ */
+reference_complete: boolean
+/**
+ * Declaration constraints withholding a guarded source edit.
+ */
+edit_reasons?: SemanticEditReason[]
 /**
  * Whether this exact decision may enable a guarded class-member fix.
  */
@@ -2415,6 +2443,17 @@ framework: string
 package: string
 relation: SemanticFrameworkRelation
 declaration: SemanticSymbol
+}
+/**
+ * Native exposure or runtime contract for an exact source declaration.
+ *
+ * Public exports carry exposure; the compiler resolves their callable bodies.
+ * Noncallable values do not manufacture an activation. Entries are independent
+ * of finding suppression and the unused-candidate list.
+ */
+export interface SemanticRuntimeEntry {
+symbol: SemanticSymbol
+origin: SemanticRuntimeOrigin
 }
 /**
  * Exact source span and content hash used to guard semantic source edits.

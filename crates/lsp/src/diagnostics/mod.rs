@@ -596,6 +596,7 @@ mod severity_gate {
             // an observability bool, not a per-finding diagnostic.
             unused_load_data_keys_global_abstain: _,
             semantic_framework_contracts: _,
+            semantic_runtime_entries: _,
             // No editor surface in v1: TypeScript already strikes deprecated
             // names through in the editor. The finding is for cleanup sweeps
             // and JSON consumers.
