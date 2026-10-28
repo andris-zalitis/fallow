@@ -3365,7 +3365,7 @@ const expectedEntryDigest = (entries) =>
               origin,
             ]),
           )
-          .sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right))),
+          .toSorted((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right))),
       ),
     )
     .digest("hex");
